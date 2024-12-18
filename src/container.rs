@@ -24,6 +24,16 @@ pub struct Container<State: ContainerState> {
 }
 
 impl Container<NotValidated> {
+    pub fn new() -> Self {
+        Self {
+            user: None,
+            mount: None,
+            pid: false,
+            net: None,
+            _p: std::marker::PhantomData,
+        }
+    }
+
     pub fn validate(
         Self {
             user,
@@ -51,6 +61,21 @@ pub struct UserNamespace<S: ContainerState> {
     gid_map: Vec<IdMap>,
     run_as: (libc::uid_t, libc::gid_t),
     _p: std::marker::PhantomData<S>,
+}
+
+impl UserNamespace<NotValidated> {
+    pub fn new(
+        uid_map: Vec<IdMap>,
+        gid_map: Vec<IdMap>,
+        run_as: (libc::uid_t, libc::gid_t),
+    ) -> Self {
+        Self {
+            uid_map,
+            gid_map,
+            run_as,
+            _p: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<V: NotCreated> UserNamespace<V> {
@@ -107,6 +132,15 @@ pub struct IdMap {
     start_intern: u32,
     start_extern: u32,
     len: u32,
+}
+impl From<(u32, u32, u32)> for IdMap {
+    fn from(value: (u32, u32, u32)) -> Self {
+        Self {
+            start_intern: value.0,
+            start_extern: value.1,
+            len: value.2,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
