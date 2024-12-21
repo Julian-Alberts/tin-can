@@ -1,4 +1,5 @@
-use std::fmt::Display;
+use core::panic;
+use std::fmt::{Debug, Display};
 
 const EXPECT_RAW_OS_ERROR: &str = "Syscall failed with undefined error code";
 
@@ -37,33 +38,119 @@ pub fn unshare(flags: i32) -> Result<(), UnshareError> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum CloneError {}
+pub enum CloneError {
+    #[error("Only namespace flags are allowed")]
+    InvalidFlags,
+}
 
-pub fn clone3(flags: i32) -> Result<libc::pid_t, CloneError> {
-    let clone_args = libc::clone_args {
-        flags: (flags | libc::CLONE_IO | libc::CLONE_VM) as u64,
-        pidfd: 0,
-        child_tid: 0,
-        parent_tid: 0,
-        exit_signal: 0,
-        stack: 0,
-        stack_size: 0,
-        tls: 0,
-        set_tid: 0,
-        set_tid_size: 0,
-        cgroup: 0,
-    };
+#[derive(Debug)]
+pub struct ProcessHandle<'a> {
+    pub(super) pid: libc::pid_t,
+    stack_ptr: *mut libc::c_void,
+    _p: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> ProcessHandle<'a> {
+    pub fn join(mut self) -> i32 {
+        eprintln!("inner join");
+        let mut status = -1;
+        unsafe { libc::waitpid(self.pid, &mut status, 0) };
+        self.pid = 0;
+        status
+    }
+
+    pub fn placeholder() -> Self {
+        Self {
+            pid: 0,
+            stack_ptr: std::ptr::null_mut(),
+            _p: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a> Drop for ProcessHandle<'a> {
+    fn drop(&mut self) {
+        if self.pid != 0 {
+            panic!("Did not join handle")
+        }
+    }
+}
+
+pub fn clone_vm_with_namespaces<'a, T: Debug>(
+    flags: i32,
+    f: fn(&mut T) -> i32,
+    args: &'a mut T,
+) -> Result<ProcessHandle<'a>, CloneError> {
+    use std::io::Write as _;
+    const NAMESPACE_FLAGS: i32 = libc::CLONE_NEWNS
+        | libc::CLONE_NEWIPC
+        | libc::CLONE_NEWNET
+        | libc::CLONE_NEWPID
+        | libc::CLONE_NEWUTS
+        | libc::CLONE_NEWTIME
+        | libc::CLONE_NEWUSER
+        | libc::CLONE_NEWCGROUP;
+    const VM_FLAGS: i32 = libc::CLONE_VM;
+    if flags & !NAMESPACE_FLAGS != 0 {
+        return Err(CloneError::InvalidFlags);
+    }
+    let stack = new_stack();
+    #[derive(Debug)]
+    struct Args<'a, T: Debug> {
+        fn_args: &'a mut T,
+        callback: fn(&mut T) -> i32,
+    }
+    extern "C" fn callback<T: Debug>(args: *mut libc::c_void) -> i32 {
+        let args = args as *mut Args<T>;
+        let args = dbg!(unsafe { args.as_mut() }.unwrap());
+
+        // TODO: Remove debug message
+        {
+            use std::process::Stdio;
+            std::process::Command::new("whoami")
+                .stdout(Stdio::inherit())
+                .output()
+                .unwrap();
+        }
+        println!("{args:?}");
+        (args.callback)(&mut args.fn_args);
+        println!("after callback");
+        0
+    }
     let res = unsafe {
-        libc::syscall(
-            libc::SYS_clone3,
-            &clone_args as *const _,
-            std::mem::size_of::<libc::clone_args>(),
+        libc::clone(
+            callback::<T>,
+            stack,
+            flags | VM_FLAGS,
+            &mut Args {
+                fn_args: args,
+                callback: f,
+            } as *mut Args<T> as *mut libc::c_void,
         )
     };
     match res {
         -1 => todo!("Handle error {:?}", std::io::Error::last_os_error()),
-        pid => Ok(pid as i32),
+        pid => Ok(ProcessHandle {
+            pid,
+            stack_ptr: stack,
+            _p: std::marker::PhantomData,
+        }),
     }
+}
+
+fn new_stack() -> *mut libc::c_void {
+    const STACK_SIZE: libc::size_t = 1024 * 1024;
+    let ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            1024 * 1024,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_STACK,
+            -1,
+            0,
+        )
+    };
+    unsafe { ptr.add(STACK_SIZE) }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -126,4 +213,26 @@ pub fn switch_user((uid, gid): (libc::uid_t, libc::gid_t)) -> Result<(), SwitchU
     }
 
     Ok(())
+}
+
+pub(crate) fn kill(pid: i32) {
+    unsafe { libc::kill(pid, libc::SIGTERM) };
+}
+
+pub(crate) fn waitpid(pid: i32, status: &mut i32, options: i32) {
+    let res = unsafe { libc::waitpid(pid, status as *mut _, options) };
+    if res != -1 {
+        return;
+    }
+    match std::io::Error::last_os_error()
+        .raw_os_error()
+        .expect("No error")
+    {
+        libc::EAGAIN => println!("EAGAIN"),
+        libc::ECHILD => println!("ECHILD"),
+        libc::EINTR => println!("EINTR"),
+        libc::EINVAL => println!("EINVAL"),
+        libc::ESRCH => println!("ESRCH"),
+        _ => panic!(),
+    }
 }

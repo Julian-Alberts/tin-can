@@ -2,12 +2,15 @@ mod create;
 mod define;
 mod validate;
 
+#[derive(Debug)]
 pub struct NotValidated;
 impl NotCreated for NotValidated {}
 impl ContainerState for NotValidated {}
+#[derive(Debug)]
 pub struct Validated;
 impl NotCreated for Validated {}
 impl ContainerState for Validated {}
+#[derive(Debug)]
 pub struct Created;
 impl ContainerState for Created {}
 
