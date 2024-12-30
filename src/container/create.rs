@@ -1,5 +1,5 @@
 use core::panic;
-use std::{fmt::Debug, path::PathBuf, pin::Pin, ptr::addr_of_mut, sync::Mutex};
+use std::{path::PathBuf, pin::Pin};
 
 use crate::linux::{self, switch_user};
 
@@ -13,61 +13,52 @@ pub enum CreateError {
     SwitchUser(#[from] linux::SwitchUserError),
 }
 
-pub struct ProcessHandle<F: FnOnce() -> i32 + Send + 'static> {
+pub struct ProcessHandle<T> {
     intern: linux::ProcessHandle<'static>,
-    process_data: Pin<Box<ProcessData<F>>>,
+    process_data: ProcessData<T>,
 }
 
-struct ProcessData<F: FnOnce() -> i32 + Send + 'static> {
+#[derive(Debug)]
+struct ProcessData<T> {
     ctp_tx: std::sync::mpsc::Sender<MsgChildToParent>,
     ptc_rx: std::sync::mpsc::Receiver<MsgParentToChild>,
     container: Container<Validated>,
-    f: Mutex<Option<F>>,
+    container_main: fn(&mut T) -> i32,
+    main_args: T,
 }
 
-impl<F> ProcessHandle<F>
-where
-    F: FnOnce() -> i32 + Send + 'static,
-{
+impl<T> ProcessHandle<T> {
     pub fn pid(&self) -> libc::pid_t {
         self.intern.pid
     }
 
-    pub fn join(self) -> i32 {
+    pub fn join(self) -> (i32, T) {
         eprintln!("outer join");
-        self.intern.join()
-    }
-}
-
-impl<F> std::fmt::Debug for ProcessData<F>
-where
-    F: FnOnce() -> i32 + Send + 'static,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProcessData")
-            .field("ctp_tx", &self.ctp_tx)
-            .field("ptc_rx", &self.ptc_rx)
-            .field("container", &self.container)
-            .finish()
+        (self.intern.join(), self.process_data.main_args)
     }
 }
 
 impl Container<Validated> {
-    pub fn create<'a, F: FnOnce() -> i32 + Send + 'static>(self, f: F) -> ProcessHandle<F> {
+    pub fn create<T: 'static>(
+        self,
+        container_main: fn(&mut T) -> i32,
+        main_args: T,
+    ) -> ProcessHandle<T> {
         let (ctp_tx, ctp_rx) = std::sync::mpsc::channel();
         let (ptc_tx, ptc_rx) = std::sync::mpsc::channel();
 
-        let mut process_data = Box::pin(ProcessData {
+        let mut process_data = ProcessData {
             ctp_tx,
             ptc_rx,
             container: self,
-            f: Mutex::new(Some(f)),
-        });
+            container_main,
+            main_args,
+        };
         let process_handle_ref =
-            unsafe { (&mut process_data as *mut Pin<Box<ProcessData<F>>>).as_mut() }.unwrap();
+            unsafe { (&mut process_data as *mut ProcessData<T>).as_mut() }.unwrap();
         let pid = linux::clone_vm_with_namespaces(
             libc::CLONE_NEWUSER,
-            container_main,
+            namespace_main,
             process_handle_ref,
         )
         .unwrap();
@@ -81,12 +72,14 @@ impl Container<Validated> {
         };
 
         while let Ok(msg) = ctp_rx.recv() {
+            eprintln!("MSG {msg:?}");
             match msg {
                 MsgChildToParent::MapUserIds => {
                     create_user_mapping(
                         handle.process_data.container.user.as_ref().unwrap(),
                         handle.pid(),
                     );
+                    eprintln!("map user ids");
                     ptc_tx.send(MsgParentToChild::UserIdsMapped).unwrap()
                 }
                 MsgChildToParent::Success => break,
@@ -94,18 +87,22 @@ impl Container<Validated> {
         }
 
         eprintln!("created2");
+        let mut status = -1;
+        unsafe { libc::waitpid(handle.pid(), &mut status as *mut _, 0) };
+        eprintln!("status {status}");
         handle
     }
 }
 
-fn container_main<F: FnOnce() -> i32 + Send + 'static>(
-    handle: &mut Pin<Box<ProcessData<F>>>,
-) -> i32 {
-    print!("TTTTEST");
+fn namespace_main<T>(handle: &mut ProcessData<T>) -> i32 {
+    eprintln!("TTTTEST");
     let mut is_root = false;
     if let Some(user) = &handle.container.user {
         let _ = handle.ctp_tx.send(MsgChildToParent::MapUserIds);
-        let Ok(MsgParentToChild::UserIdsMapped) = handle.ptc_rx.recv() else {
+        let Ok(MsgParentToChild::UserIdsMapped) =
+            handle.ptc_rx.recv_timeout(std::time::Duration::new(1, 0))
+        else {
+            return 1;
             panic!("Unexpected message")
         };
         if user.uid_map.iter().any(|m| m.start_intern == 0)
@@ -117,8 +114,7 @@ fn container_main<F: FnOnce() -> i32 + Send + 'static>(
     }
     eprintln!("created");
     handle.ctp_tx.send(MsgChildToParent::Success).unwrap();
-    std::thread::sleep(std::time::Duration::new(1, 0));
-    (handle.f.lock().unwrap().take().unwrap())()
+    (handle.container_main)(&mut handle.main_args)
 }
 
 //fn mount(mount: MountNamespace) {}
@@ -148,10 +144,13 @@ fn create_user_mapping(user: &UserNamespace<Validated>, tid: libc::pid_t) {
     });
 }
 
+#[derive(Debug)]
 enum MsgChildToParent {
     MapUserIds,
     Success,
 }
+
+#[derive(Debug)]
 enum MsgParentToChild {
     UserIdsMapped,
 }

@@ -1,25 +1,27 @@
-use std::{io::Read, process::Stdio};
+use std::process::{Command, Stdio};
 
-use tin_can::container::{Container, IdMap, NotValidated, UserNamespace, Validated};
+use simplelog::*;
+use tin_can::container::{user_namespace::UserNamespaceRoot, ContainerBuilder, IdMap, RunCommand};
 
 fn main() {
-    let uid = unsafe { libc::getuid() };
-    let gid = unsafe { libc::getgid() };
-    let container: Container<NotValidated> = tin_can::container::Container::new()
-        .create_user_namespace(UserNamespace::new(
-            vec![(0, uid, 1).into()],
-            vec![(0, gid, 1).into()],
-            (0, 0),
-        ));
-    let container = Container::<NotValidated>::validate(container).unwrap();
-    Container::<Validated>::create(container, || {
-        let cmd = std::process::Command::new("whoami")
-            .stdout(Stdio::piped())
-            .stdout(Stdio::piped())
-            .output()
-            .unwrap();
-        println!("{:?}", String::from_utf8(cmd.stdout));
-        cmd.status.code().unwrap_or(i32::MAX)
-    })
-    .join();
+    CombinedLogger::init(vec![TermLogger::new(
+        LevelFilter::Info,
+        Config::default(),
+        TerminalMode::Stderr,
+        ColorChoice::Auto,
+    )])
+    .unwrap();
+
+    let mut command = Command::new("whoami");
+    command
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .stdin(Stdio::inherit());
+    ContainerBuilder::new(UserNamespaceRoot::new(
+        IdMap::new_with_current_user_as_root(),
+        IdMap::new_with_current_user_as_root(),
+        RunCommand::new(command),
+    ))
+    .run()
+    .unwrap();
 }

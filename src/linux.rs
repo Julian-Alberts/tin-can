@@ -1,5 +1,10 @@
 use core::panic;
-use std::fmt::{Debug, Display};
+use std::{
+    borrow::Borrow,
+    fmt::{Debug, Display},
+    pin::Pin,
+    sync::Arc,
+};
 
 const EXPECT_RAW_OS_ERROR: &str = "Syscall failed with undefined error code";
 
@@ -52,9 +57,19 @@ pub struct ProcessHandle<'a> {
 
 impl<'a> ProcessHandle<'a> {
     pub fn join(mut self) -> i32 {
-        eprintln!("inner join");
+        log::info!("Joining namespace process");
         let mut status = -1;
-        unsafe { libc::waitpid(self.pid, &mut status, 0) };
+        let res = unsafe { libc::waitpid(self.pid, &mut status, 0) };
+        if res == -1 {
+            let os_err = std::io::Error::last_os_error()
+                .raw_os_error()
+                .expect(EXPECT_RAW_OS_ERROR);
+            match os_err {
+                libc::EAGAIN => panic!("EAGAIN"),
+                libc::ECHILD => panic!("ECHILD"),
+                _ => panic!("Unknown"),
+            }
+        }
         self.pid = 0;
         status
     }
@@ -71,17 +86,17 @@ impl<'a> ProcessHandle<'a> {
 impl<'a> Drop for ProcessHandle<'a> {
     fn drop(&mut self) {
         if self.pid != 0 {
-            panic!("Did not join handle")
+            let mut status = -1;
+            unsafe { libc::waitpid(self.pid, &mut status, 0) };
         }
     }
 }
 
-pub fn clone_vm_with_namespaces<'a, T: Debug>(
+pub fn clone_vm_with_namespaces<'a, T>(
     flags: i32,
     f: fn(&mut T) -> i32,
     args: &'a mut T,
 ) -> Result<ProcessHandle<'a>, CloneError> {
-    use std::io::Write as _;
     const NAMESPACE_FLAGS: i32 = libc::CLONE_NEWNS
         | libc::CLONE_NEWIPC
         | libc::CLONE_NEWNET
@@ -90,32 +105,24 @@ pub fn clone_vm_with_namespaces<'a, T: Debug>(
         | libc::CLONE_NEWTIME
         | libc::CLONE_NEWUSER
         | libc::CLONE_NEWCGROUP;
-    const VM_FLAGS: i32 = libc::CLONE_VM;
+    const VM_FLAGS: i32 = libc::CLONE_VM | libc::CLONE_FILES | libc::SIGCHLD;
     if flags & !NAMESPACE_FLAGS != 0 {
         return Err(CloneError::InvalidFlags);
     }
     let stack = new_stack();
     #[derive(Debug)]
-    struct Args<'a, T: Debug> {
+    struct Args<'a, T> {
         fn_args: &'a mut T,
         callback: fn(&mut T) -> i32,
     }
-    extern "C" fn callback<T: Debug>(args: *mut libc::c_void) -> i32 {
+    extern "C" fn callback<T>(args: *mut libc::c_void) -> i32 {
+        log::info!("Successfuly cloned new process");
         let args = args as *mut Args<T>;
-        let args = dbg!(unsafe { args.as_mut() }.unwrap());
-
-        // TODO: Remove debug message
-        {
-            use std::process::Stdio;
-            std::process::Command::new("whoami")
-                .stdout(Stdio::inherit())
-                .output()
-                .unwrap();
-        }
-        println!("{args:?}");
-        (args.callback)(&mut args.fn_args);
-        println!("after callback");
-        0
+        let args = unsafe { args.as_mut() }.unwrap();
+        log::info!("Calling callback with args");
+        let res = (args.callback)(&mut args.fn_args);
+        log::info!("Finished callback");
+        res
     }
     let res = unsafe {
         libc::clone(
@@ -235,4 +242,26 @@ pub(crate) fn waitpid(pid: i32, status: &mut i32, options: i32) {
         libc::ESRCH => println!("ESRCH"),
         _ => panic!(),
     }
+}
+
+pub(crate) fn get_euid() -> u32 {
+    unsafe { libc::geteuid() }
+}
+
+pub(crate) fn get_egid() -> u32 {
+    unsafe { libc::getegid() }
+}
+
+pub(crate) fn get_tid() -> i32 {
+    unsafe { libc::getpid() }
+}
+
+pub(crate) fn pause() {
+    unsafe { libc::pause() };
+    log::info!("Process resumed");
+}
+
+pub(crate) fn resume(pid: i32) {
+    log::info!("Resuming {pid}");
+    unsafe { libc::kill(pid, libc::SIGCONT) };
 }
