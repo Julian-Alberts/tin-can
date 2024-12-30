@@ -88,6 +88,7 @@ impl<'a> Drop for ProcessHandle<'a> {
         if self.pid != 0 {
             let mut status = -1;
             unsafe { libc::waitpid(self.pid, &mut status, 0) };
+            unsafe { libc::free(self.stack_ptr) };
         }
     }
 }
@@ -105,7 +106,7 @@ pub fn clone_vm_with_namespaces<'a, T>(
         | libc::CLONE_NEWTIME
         | libc::CLONE_NEWUSER
         | libc::CLONE_NEWCGROUP;
-    const VM_FLAGS: i32 = libc::CLONE_VM | libc::CLONE_FILES | libc::SIGCHLD;
+    const VM_FLAGS: i32 = libc::CLONE_FILES | libc::SIGCHLD;
     if flags & !NAMESPACE_FLAGS != 0 {
         return Err(CloneError::InvalidFlags);
     }
@@ -146,11 +147,11 @@ pub fn clone_vm_with_namespaces<'a, T>(
 }
 
 fn new_stack() -> *mut libc::c_void {
-    const STACK_SIZE: libc::size_t = 1024 * 1024;
+    const STACK_SIZE: libc::size_t = 1024 * 1024 * 10;
     let ptr = unsafe {
         libc::mmap(
             std::ptr::null_mut(),
-            1024 * 1024,
+            STACK_SIZE,
             libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_STACK,
             -1,
@@ -252,16 +253,69 @@ pub(crate) fn get_egid() -> u32 {
     unsafe { libc::getegid() }
 }
 
-pub(crate) fn get_tid() -> i32 {
-    unsafe { libc::getpid() }
+#[derive(Debug)]
+pub struct EventFd<T> {
+    event_fd: libc::c_int,
+    _p: std::marker::PhantomData<T>,
 }
 
-pub(crate) fn pause() {
-    unsafe { libc::pause() };
-    log::info!("Process resumed");
+impl<T> EventFd<T> {
+    pub fn new() -> std::io::Result<Self> {
+        let event_fd = unsafe { libc::eventfd(0, 0) };
+        if event_fd == -1 {
+            return Err(std::io::Error::last_os_error());
+        };
+        Ok(Self {
+            event_fd,
+            _p: Default::default(),
+        })
+    }
+
+    pub fn send(&self, data: T) -> std::io::Result<()> {
+        let res = unsafe {
+            libc::write(
+                self.event_fd,
+                &data as *const _ as *const _,
+                std::mem::size_of::<T>(),
+            )
+        };
+
+        if res == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        Ok(())
+    }
+
+    pub fn receive(&self) -> std::io::Result<T> {
+        let mut data = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let res = unsafe {
+            libc::read(
+                self.event_fd,
+                &mut data as *mut _ as *mut _,
+                std::mem::size_of::<T>(),
+            )
+        };
+
+        if res == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        Ok(data)
+    }
 }
 
-pub(crate) fn resume(pid: i32) {
-    log::info!("Resuming {pid}");
-    unsafe { libc::kill(pid, libc::SIGCONT) };
+impl<T> Clone for EventFd<T> {
+    fn clone(&self) -> Self {
+        Self {
+            event_fd: unsafe { libc::dup(self.event_fd) },
+            _p: self._p.clone(),
+        }
+    }
+}
+
+impl<T> Drop for EventFd<T> {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.event_fd) };
+    }
 }

@@ -28,9 +28,13 @@ where
     type Ok = C::Ok;
 
     fn run(self) -> Result<Self::Ok, Self::Error> {
+        let msg_queue_ctp = linux::EventFd::new().unwrap();
+        let msg_queue_ptc = linux::EventFd::new().unwrap();
         let mut shared_data = SharedData {
             ret: None,
             component: Some(self.component),
+            msg_queue_ctp: msg_queue_ctp.clone(),
+            msg_queue_ptc: msg_queue_ptc.clone(),
         };
         let join_handle = linux::clone_vm_with_namespaces(
             libc::CLONE_NEWUSER,
@@ -55,10 +59,10 @@ where
             file.write_all(buf.as_slice())?;
             Ok(())
         }
+        msg_queue_ctp.receive().unwrap();
         write_id_map(self.uid_map, join_handle.pid)?;
         write_id_map(self.gid_map, join_handle.pid)?;
-        std::thread::sleep(std::time::Duration::new(2, 0));
-        linux::resume(join_handle.pid);
+        msg_queue_ptc.send(1).unwrap();
         // shared_data.ret can only be assumed to be set after the child has finished
         join_handle.join();
         let Some(res) = shared_data.ret else {
@@ -120,18 +124,16 @@ where
 {
     ret: Option<Result<C::Ok, BuildUserNamespaceRootError<C::Error>>>,
     component: Option<C>,
+    msg_queue_ctp: linux::EventFd<usize>,
+    msg_queue_ptc: linux::EventFd<usize>,
 }
 fn root_namespace_vm<C>(data: &mut SharedData<C>) -> i32
 where
     C: Component,
 {
     log::debug!("root namespace main");
-    linux::pause();
-    log::debug!("Namespace resumed");
-    return 0;
-    // std::thread::sleep(std::time::Duration::new(60, 0));
-    log::debug!("Namespace waiting for parent");
-    linux::pause();
+    data.msg_queue_ctp.send(1).unwrap();
+    data.msg_queue_ptc.receive().unwrap();
     log::debug!("Namespace resumed");
     linux::switch_user((0, 0)).unwrap();
     let res = data
