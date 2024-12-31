@@ -23,7 +23,7 @@ fn main() {
     ContainerBuilder::new(UserNamespaceRoot::new(
         IdMap::new_with_current_user_as_root(),
         IdMap::new_with_current_user_as_root(),
-        MountNamespace::new(RunCommand::new(command)),
+        MountNamespace::new(RunCommand::new(command), vec![]),
     ))
     .run()
     .unwrap();

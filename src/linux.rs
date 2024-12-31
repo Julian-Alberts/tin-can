@@ -1,5 +1,9 @@
 use core::panic;
-use std::fmt::{Debug, Display};
+use std::{
+    fmt::{Debug, Display},
+    os::unix::ffi::OsStrExt,
+    path::PathBuf,
+};
 #[cfg(feature = "cap")]
 pub mod libcap;
 
@@ -69,14 +73,6 @@ impl<'a> ProcessHandle<'a> {
         }
         self.pid = 0;
         status
-    }
-
-    pub fn placeholder() -> Self {
-        Self {
-            pid: 0,
-            stack_ptr: std::ptr::null_mut(),
-            _p: std::marker::PhantomData,
-        }
     }
 }
 
@@ -220,28 +216,6 @@ pub fn switch_user((uid, gid): (libc::uid_t, libc::gid_t)) -> Result<(), SwitchU
     Ok(())
 }
 
-pub(crate) fn kill(pid: i32) {
-    unsafe { libc::kill(pid, libc::SIGTERM) };
-}
-
-pub(crate) fn waitpid(pid: i32, status: &mut i32, options: i32) {
-    let res = unsafe { libc::waitpid(pid, status as *mut _, options) };
-    if res != -1 {
-        return;
-    }
-    match std::io::Error::last_os_error()
-        .raw_os_error()
-        .expect("No error")
-    {
-        libc::EAGAIN => println!("EAGAIN"),
-        libc::ECHILD => println!("ECHILD"),
-        libc::EINTR => println!("EINTR"),
-        libc::EINVAL => println!("EINVAL"),
-        libc::ESRCH => println!("ESRCH"),
-        _ => panic!(),
-    }
-}
-
 pub(crate) fn get_euid() -> u32 {
     unsafe { libc::geteuid() }
 }
@@ -315,4 +289,94 @@ impl<T> Drop for EventFd<T> {
     fn drop(&mut self) {
         unsafe { libc::close(self.event_fd) };
     }
+}
+
+pub(crate) fn pivot_root(
+    new_root: &std::path::Path,
+    put_old: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    let new_root = new_root.as_os_str().as_bytes();
+    let new_root = std::ffi::CStr::from_bytes_with_nul(new_root).unwrap();
+    let put_old = put_old.as_os_str().as_bytes();
+    let put_old = std::ffi::CStr::from_bytes_with_nul(put_old).unwrap();
+
+    let new_root: *const libc::c_char = new_root.as_ptr();
+    let put_old: *const libc::c_char = put_old.as_ptr();
+    let res = unsafe { libc::syscall(libc::SYS_pivot_root, new_root, put_old) };
+    if res == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn mount_overlay(
+    lower: &std::path::Path,
+    upper: &std::path::Path,
+    work: &std::path::Path,
+    merged: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    let mut data = b"lowerdir=".to_vec();
+    data.extend_from_slice(lower.as_os_str().as_bytes());
+    data.extend_from_slice(b",upperdir=");
+    data.extend_from_slice(upper.as_os_str().as_bytes());
+    data.extend_from_slice(b",workdir=");
+    data.extend_from_slice(work.as_os_str().as_bytes());
+    data.push(0);
+    let data = std::ffi::CStr::from_bytes_with_nul(&data).unwrap();
+    mount(
+        &PathBuf::from("overlay"),
+        merged,
+        Some(c"overlay"),
+        0,
+        Some(data),
+    )
+}
+
+pub fn mount(
+    source: &std::path::Path,
+    target: &std::path::Path,
+    file_system_type: Option<&std::ffi::CStr>,
+    mount_flags: libc::c_ulong,
+    data: Option<&std::ffi::CStr>,
+) -> Result<(), std::io::Error> {
+    let src = std::ffi::CStr::from_bytes_with_nul(source.as_os_str().as_bytes()).unwrap();
+    let target = std::ffi::CStr::from_bytes_with_nul(target.as_os_str().as_bytes()).unwrap();
+    let data = if let Some(data) = data {
+        data.as_ptr()
+    } else {
+        std::ptr::null()
+    } as *const _;
+    let file_system_type = if let Some(fs) = file_system_type {
+        fs.as_ptr()
+    } else {
+        std::ptr::null()
+    };
+    unsafe {
+        libc::mount(
+            src.as_ptr(),
+            target.as_ptr(),
+            file_system_type,
+            mount_flags,
+            data,
+        )
+    };
+
+    Ok(())
+}
+
+pub(crate) fn unmount(mount: &std::path::Path, lazy: bool) -> Result<(), std::io::Error> {
+    let flags = if lazy { libc::MNT_DETACH } else { 0 };
+    let target = std::ffi::CStr::from_bytes_with_nul(mount.as_os_str().as_bytes()).unwrap();
+    let res = unsafe { libc::umount2(target.as_ptr(), flags) };
+    if res == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn bind_mount(
+    src: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    mount(src, target, None, libc::MS_BIND, None)
 }
