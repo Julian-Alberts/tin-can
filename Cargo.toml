@@ -14,4 +14,4 @@ simplelog = "0.12.2"
 [features]
 cap = []
 map_uid_range = ["cap"]
-default = ["map_uid_range"]
+default = []

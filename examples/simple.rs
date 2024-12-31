@@ -22,9 +22,7 @@ fn main() {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .stdin(Stdio::inherit());
-    ContainerBuilder::new(UserNamespaceRoot::new(
-        IdMap::new_with_current_user_as_root(),
-        IdMap::new_with_current_user_as_root(),
+    ContainerBuilder::new(UserNamespaceRoot::new_with_current_user_as_root(
         MountNamespace::new(RunCommand::new(command), vec![]),
     ))
     .run()

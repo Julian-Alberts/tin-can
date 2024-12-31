@@ -4,19 +4,52 @@ use crate::{container::MapType, linux};
 
 use crate::container::{Group, IdMap, Step, User};
 
-pub struct UserNamespaceRoot<C> {
-    component: C,
+pub struct UserNamespaceRoot<S> {
+    next_step: S,
     uid_map: IdMap<User>,
     gid_map: IdMap<Group>,
 }
 
-impl<C> UserNamespaceRoot<C> {
-    pub fn new(uid_map: IdMap<User>, gid_map: IdMap<Group>, component: C) -> Self {
+impl<S> UserNamespaceRoot<S> {
+    pub fn new_with_current_user_as_root(next_step: S) -> Self {
         Self {
-            component,
+            next_step,
+            uid_map: IdMap::new_with_current_user_as_root(),
+            gid_map: IdMap::new_with_current_user_as_root(),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum NewUserNamespaceError {
+    #[error("Process is missing capability SETUID")]
+    MissingCapabilitySetUid,
+    #[error("Process is missing capability SETGID")]
+    MissingCapabilitySetGid,
+}
+
+#[cfg(feature = "map_uid_range")]
+impl<S> UserNamespaceRoot<S> {
+    pub fn new(
+        uid_map: IdMap<User>,
+        gid_map: IdMap<Group>,
+        next_step: S,
+    ) -> Result<Self, NewUserNamespaceError> {
+        if uid_map.entries.len() > 1
+            && !linux::libcap::has_capability(linux::libcap::Capability::SETUID)
+        {
+            return Err(NewUserNamespaceError::MissingCapabilitySetUid);
+        }
+        if gid_map.entries.len() > 1
+            && !linux::libcap::has_capability(linux::libcap::Capability::SETGID)
+        {
+            return Err(NewUserNamespaceError::MissingCapabilitySetGid);
+        }
+        Ok(Self {
+            next_step,
             uid_map,
             gid_map,
-        }
+        })
     }
 }
 impl<C> Step for UserNamespaceRoot<C>
@@ -31,7 +64,7 @@ where
         let msg_queue_ptc = linux::EventFd::new().unwrap();
         let mut shared_data = SharedData {
             ret: None,
-            component: Some(self.component),
+            component: Some(self.next_step),
             msg_queue_ctp: msg_queue_ctp.clone(),
             msg_queue_ptc: msg_queue_ptc.clone(),
         };
