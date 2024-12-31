@@ -1,10 +1,8 @@
 mod builder;
-pub mod mount_namespace;
-pub mod user_namespace;
+pub mod step;
 pub use builder::*;
 
-pub trait InitComponent: Component {}
-pub trait Component {
+pub trait Step {
     type Error: std::error::Error;
     type Ok;
     fn run(self) -> Result<Self::Ok, Self::Error>;

@@ -2,8 +2,10 @@ use std::process::{Command, Stdio};
 
 use simplelog::*;
 use tin_can::container::{
-    mount_namespace::MountNamespace, user_namespace::UserNamespaceRoot, ContainerBuilder, IdMap,
-    RunCommand,
+    step::{
+        mount_namespace::MountNamespace, run_command::RunCommand, user_namespace::UserNamespaceRoot,
+    },
+    ContainerBuilder, IdMap,
 };
 
 fn main() {

@@ -1,12 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::linux::{self, UnshareError};
-
-use super::Component;
+use crate::{
+    container::Step,
+    linux::{self, UnshareError},
+};
 
 pub struct MountNamespace<'a, C>
 where
-    C: Component,
+    C: Step,
 {
     c: C,
     operations: Vec<MountOperation<'a>>,
@@ -14,16 +15,16 @@ where
 
 impl<'a, C> MountNamespace<'a, C>
 where
-    C: Component,
+    C: Step,
 {
     pub fn new(c: C, operations: Vec<MountOperation<'a>>) -> Self {
         Self { c, operations }
     }
 }
 
-impl<'a, C> Component for MountNamespace<'a, C>
+impl<'a, C> Step for MountNamespace<'a, C>
 where
-    C: Component,
+    C: Step,
 {
     type Error = MountNamespaceError<C::Error>;
 

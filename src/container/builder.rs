@@ -1,22 +1,4 @@
-use super::{Component, InitComponent};
-
-pub struct RunCommand {
-    command: std::process::Command,
-}
-
-impl RunCommand {
-    pub fn new(command: std::process::Command) -> Self {
-        Self { command }
-    }
-}
-
-impl Component for RunCommand {
-    type Error = std::io::Error;
-    type Ok = std::process::ExitStatus;
-    fn run(mut self) -> Result<Self::Ok, Self::Error> {
-        self.command.spawn()?.wait()
-    }
-}
+use super::Step;
 
 pub struct ContainerBuilder<C> {
     component: C,
@@ -24,7 +6,7 @@ pub struct ContainerBuilder<C> {
 
 impl<C> ContainerBuilder<C>
 where
-    C: InitComponent,
+    C: Step,
 {
     pub fn new(component: C) -> Self {
         Self { component }
@@ -33,7 +15,7 @@ where
 
 impl<C> ContainerBuilder<C>
 where
-    C: Component,
+    C: Step,
 {
     pub fn run(self) -> Result<C::Ok, C::Error> {
         self.component.run()

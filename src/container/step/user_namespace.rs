@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use crate::{container::MapType, linux};
 
-use super::{Component, Group, IdMap, InitComponent, User};
+use crate::container::{Group, IdMap, Step, User};
 
 pub struct UserNamespaceRoot<C> {
     component: C,
@@ -19,10 +19,9 @@ impl<C> UserNamespaceRoot<C> {
         }
     }
 }
-impl<C> InitComponent for UserNamespaceRoot<C> where C: Component {}
-impl<C> Component for UserNamespaceRoot<C>
+impl<C> Step for UserNamespaceRoot<C>
 where
-    C: Component,
+    C: Step,
 {
     type Error = BuildUserNamespaceRootError<C::Error>;
     type Ok = C::Ok;
@@ -42,7 +41,6 @@ where
             &mut shared_data,
         )?;
         log::info!("PID: {}", join_handle.pid);
-        // std::thread::sleep(std::time::Duration::new(60, 0));
         fn write_id_map<T: MapType>(map: IdMap<T>, pid: libc::pid_t) -> Result<(), IdMapError<T>> {
             log::debug!("Creating {} for process {pid}", T::file());
             use std::io::Write as _;
@@ -120,7 +118,7 @@ impl std::fmt::Display for IdMapError<Group> {
 
 struct SharedData<C>
 where
-    C: Component,
+    C: Step,
 {
     ret: Option<Result<C::Ok, BuildUserNamespaceRootError<C::Error>>>,
     component: Option<C>,
@@ -129,7 +127,7 @@ where
 }
 fn root_namespace_vm<C>(data: &mut SharedData<C>) -> i32
 where
-    C: Component,
+    C: Step,
 {
     log::debug!("root namespace main");
     data.msg_queue_ctp.send(1).unwrap();
