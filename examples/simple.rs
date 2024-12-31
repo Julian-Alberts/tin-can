@@ -1,7 +1,10 @@
 use std::process::{Command, Stdio};
 
 use simplelog::*;
-use tin_can::container::{user_namespace::UserNamespaceRoot, ContainerBuilder, IdMap, RunCommand};
+use tin_can::container::{
+    mount_namespace::MountNamespace, user_namespace::UserNamespaceRoot, ContainerBuilder, IdMap,
+    RunCommand,
+};
 
 fn main() {
     CombinedLogger::init(vec![TermLogger::new(
@@ -12,7 +15,7 @@ fn main() {
     )])
     .unwrap();
 
-    let mut command = Command::new("whoami");
+    let mut command = Command::new("bash");
     command
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -20,7 +23,7 @@ fn main() {
     ContainerBuilder::new(UserNamespaceRoot::new(
         IdMap::new_with_current_user_as_root(),
         IdMap::new_with_current_user_as_root(),
-        RunCommand::new(command),
+        MountNamespace::new(RunCommand::new(command)),
     ))
     .run()
     .unwrap();

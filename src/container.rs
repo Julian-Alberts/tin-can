@@ -1,4 +1,5 @@
 mod builder;
+pub mod mount_namespace;
 pub mod user_namespace;
 pub use builder::*;
 
