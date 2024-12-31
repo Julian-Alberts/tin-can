@@ -11,3 +11,7 @@ thiserror = "2.0.7"
 [dev-dependencies]
 simplelog = "0.12.2"
 
+[features]
+cap = []
+map_uid_range = ["cap"]
+default = ["map_uid_range"]

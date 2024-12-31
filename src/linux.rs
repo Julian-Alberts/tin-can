@@ -1,14 +1,7 @@
 use core::panic;
-use std::{
-    borrow::Borrow,
-    fmt::{Debug, Display},
-    pin::Pin,
-    sync::Arc,
-};
-
-use capability::CAP_SETUID;
-
-mod capability;
+use std::fmt::{Debug, Display};
+#[cfg(feature = "cap")]
+pub mod libcap;
 
 const EXPECT_RAW_OS_ERROR: &str = "Syscall failed with undefined error code";
 
@@ -322,33 +315,4 @@ impl<T> Drop for EventFd<T> {
     fn drop(&mut self) {
         unsafe { libc::close(self.event_fd) };
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Capability {
-    SETGID,
-    SETUID,
-}
-
-impl Capability {
-    fn to_cap(&self) -> capability::cap_value_t {
-        match self {
-            Capability::SETGID => capability::CAP_SETGID as i32,
-            Capability::SETUID => capability::CAP_SETUID as i32,
-        }
-    }
-}
-
-pub fn has_capability(cap: Capability) -> bool {
-    let caps = unsafe { capability::cap_get_proc() };
-    let mut cap_value = 0;
-    unsafe {
-        capability::cap_get_flag(
-            caps,
-            cap.to_cap(),
-            capability::cap_flag_t_CAP_EFFECTIVE,
-            &mut cap_value,
-        )
-    };
-    cap_value == 1
 }
