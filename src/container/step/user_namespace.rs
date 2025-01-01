@@ -38,11 +38,13 @@ impl<S> UserNamespaceRoot<S> {
         if uid_map.entries.len() > 1
             && !linux::libcap::has_capability(linux::libcap::Capability::SETUID)
         {
+            log::error!("The process is missing the SETUID permission");
             return Err(NewUserNamespaceError::MissingCapabilitySetUid);
         }
         if gid_map.entries.len() > 1
             && !linux::libcap::has_capability(linux::libcap::Capability::SETGID)
         {
+            log::error!("The process is missing the SETGID permission");
             return Err(NewUserNamespaceError::MissingCapabilitySetGid);
         }
         Ok(Self {
@@ -57,7 +59,7 @@ where
     C: Step,
 {
     type Error = BuildUserNamespaceRootError<C::Error>;
-    type Ok = C::Ok;
+    type Ok = ();
 
     fn run(self) -> Result<Self::Ok, Self::Error> {
         let msg_queue_ctp = linux::EventFd::new().unwrap();
@@ -96,10 +98,10 @@ where
         msg_queue_ptc.send(1).unwrap();
         // shared_data.ret can only be assumed to be set after the child has finished
         join_handle.join();
-        let Some(res) = shared_data.ret else {
-            panic!("No return value");
-        };
-        res
+        //let Some(res) = shared_data.ret else {
+        //    panic!("No return value");
+        //};
+        Ok(())
     }
 }
 
@@ -172,7 +174,9 @@ where
         .take()
         .expect("Component called twice")
         .run()
-        .map_err(BuildUserNamespaceRootError::ChildError);
+        .map_err(BuildUserNamespaceRootError::ChildError)
+        .inspect_err(|e| log::error!("{e}"));
+    res.as_ref().unwrap();
     data.ret = Some(res);
     0
 }

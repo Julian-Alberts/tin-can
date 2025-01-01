@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{
     container::Step,
@@ -31,11 +31,12 @@ where
     type Ok = C::Ok;
 
     fn run(self) -> Result<Self::Ok, Self::Error> {
+        log::info!("Unshare mount namespace");
         linux::unshare(libc::CLONE_NEWNS)?;
         self.operations
             .into_iter()
-            .try_for_each(MountOperation::run)
-            .map_err(MountNamespaceError::Op)?;
+            .try_for_each(MountOperation::run)?;
+        log::info!("Finished mounting");
         self.c.run().map_err(MountNamespaceError::ChildError)
     }
 }
@@ -48,7 +49,7 @@ where
     #[error(transparent)]
     Unshare(#[from] UnshareError),
     #[error("Failed to run mount operation {0}")]
-    Op(std::io::Error),
+    Op(#[from] MountingError),
     #[error(transparent)]
     ChildError(E),
 }
@@ -63,6 +64,7 @@ pub enum MountOperation<'a> {
     PivotRoot {
         new_root: &'a Path,
         put_old: &'a Path,
+        auto_unmount: bool,
     },
     BindMount {
         src: &'a Path,
@@ -91,10 +93,7 @@ impl<'a> MountOperation<'a> {
             Self::PivotRoot {
                 new_root: new_root,
                 put_old: put_old,
-            },
-            Self::Unmount {
-                mount: put_old,
-                lazy: true,
+                auto_unmount: true,
             },
         ]
     }
@@ -113,37 +112,89 @@ impl<'a> MountOperation<'a> {
                 work: work_sys,
                 merged: new_root,
             },
+            Self::BindMount {
+                src: new_root,
+                target: new_root,
+            },
             Self::PivotRoot {
                 new_root: new_root,
                 put_old: put_old,
-            },
-            Self::Unmount {
-                mount: put_old,
-                lazy: true,
+                auto_unmount: true,
             },
         ]
     }
 
-    fn run(self) -> std::io::Result<()> {
+    fn run(self) -> Result<(), MountingError> {
         match self {
             MountOperation::OverlayMount {
                 lower,
                 upper,
                 work,
                 merged,
-            } => linux::mount_overlay(&lower, &upper, &work, &merged),
-            MountOperation::PivotRoot { new_root, put_old } => {
-                linux::pivot_root(&new_root, &put_old)
+            } => linux::mount_overlay(&lower, &upper, &work, &merged).map_err(|error| {
+                MountingError {
+                    mount_type: "overlay",
+                    error,
+                }
+            }),
+            MountOperation::PivotRoot {
+                new_root,
+                put_old,
+                auto_unmount,
+            } => {
+                log::debug!(
+                    "PivotRoot use {:?} as new root and move old root to {:?}",
+                    new_root,
+                    put_old
+                );
+                let abs_put_old = new_root.join(put_old);
+                linux::pivot_root(&new_root, &abs_put_old).map_err(|error| MountingError {
+                    mount_type: "pivot_root",
+                    error,
+                })?;
+                if auto_unmount {
+                    let put_old = PathBuf::from("/").join(put_old);
+                    MountOperation::Unmount {
+                        mount: &put_old,
+                        lazy: true,
+                    }
+                    .run()?;
+                }
+                Ok(())
             }
-            MountOperation::BindMount { src, target } => linux::bind_mount(src, target),
-            MountOperation::Unmount { mount, lazy } => linux::unmount(mount, lazy),
+            MountOperation::BindMount { src, target } => {
+                log::debug!("Bind {:?} to {:?}", src, target);
+                linux::bind_mount(src, target).map_err(|error| MountingError {
+                    mount_type: "bind",
+                    error,
+                })
+            }
+            MountOperation::Unmount { mount, lazy } => {
+                log::debug!("Unmount {} lazy: {lazy}", mount.to_string_lossy());
+                linux::unmount(mount, lazy).map_err(|error| MountingError {
+                    mount_type: "unmount",
+                    error,
+                })
+            }
             MountOperation::Mount {
                 source,
                 target,
                 fs_type,
                 flags,
                 data,
-            } => linux::mount(source, target, fs_type, flags, data),
+            } => {
+                linux::mount(source, target, fs_type, flags, data).map_err(|error| MountingError {
+                    mount_type: "mount",
+                    error,
+                })
+            }
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Mount operation failed type: \"{mount_type}\" error: {error}")]
+pub struct MountingError {
+    mount_type: &'static str,
+    error: std::io::Error,
 }
