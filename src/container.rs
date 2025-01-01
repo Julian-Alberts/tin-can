@@ -1,6 +1,10 @@
 mod builder;
 pub mod step;
+use std::{io::BufRead, ops::RangeBounds};
+
 pub use builder::*;
+
+use crate::linux;
 
 pub trait Step {
     type Error: std::error::Error;
@@ -14,6 +18,7 @@ pub trait MapType {
     fn prepare_process(_pid: libc::pid_t) -> std::io::Result<()> {
         Ok(())
     }
+    fn subid_file() -> &'static std::path::Path;
 }
 
 #[derive(Debug)]
@@ -25,6 +30,9 @@ impl MapType for User {
 
     fn file() -> &'static str {
         "uid_map"
+    }
+    fn subid_file() -> &'static std::path::Path {
+        std::path::Path::new("/etc/subuid")
     }
 }
 #[derive(Debug)]
@@ -43,6 +51,9 @@ impl MapType for Group {
         path.push(_pid.to_string());
         path.push("setgroups");
         std::fs::write(path, "deny")
+    }
+    fn subid_file() -> &'static std::path::Path {
+        std::path::Path::new("/etc/subgid")
     }
 }
 
@@ -79,6 +90,53 @@ where
             external,
             len,
         });
+    }
+
+    fn is_valid(&self) -> bool {
+        let Ok(file) = std::fs::File::open(T::subid_file()) else {
+            return false;
+        };
+
+        // TODO: Move to linux module
+        let uid = unsafe { libc::getuid() };
+        let username = std::cell::OnceCell::new();
+
+        let file = std::io::BufReader::new(file);
+        let subids_for_user = file
+            .lines()
+            .filter_map(Result::ok)
+            .filter(|entry| !entry.is_empty())
+            .filter_map(|entry| {
+                let mut parts = entry.split(':');
+                let user = parts.next()?;
+
+                if user.chars().all(|c| c.is_ascii_digit()) {
+                    if user.parse::<u32>().ok()? != uid {
+                        return None;
+                    }
+                } else {
+                    let username = username
+                        .get_or_init(|| linux::get_user_name(uid))
+                        .as_ref()?;
+                    if username != user {
+                        return None;
+                    }
+                };
+
+                let start: u32 = parts.next()?.parse().ok()?;
+                let len: u32 = parts.next()?.parse().ok()?;
+                Some(start..start + len)
+            })
+            .collect::<Vec<_>>();
+
+        let allowed = self.entries.iter().all(|mapping| {
+            subids_for_user.iter().any(|allowed| {
+                allowed.contains(&mapping.internal)
+                    && allowed.contains(&(mapping.internal + mapping.len))
+            })
+        });
+
+        allowed
     }
 }
 

@@ -3,6 +3,7 @@ use std::{
     fmt::{Debug, Display},
     os::unix::ffi::OsStrExt,
     path::PathBuf,
+    str::Utf8Error,
 };
 #[cfg(feature = "cap")]
 pub mod libcap;
@@ -379,4 +380,15 @@ pub(crate) fn bind_mount(
     target: &std::path::Path,
 ) -> Result<(), std::io::Error> {
     mount(src, target, None, libc::MS_BIND, None)
+}
+
+pub(crate) fn get_user_name(uid: u32) -> Option<String> {
+    let passwd = unsafe { libc::getpwuid(uid) };
+    if passwd.is_null() {
+        return None;
+    }
+
+    let passwd = unsafe { passwd.as_ref().unwrap() };
+    let username = unsafe { std::ffi::CStr::from_ptr(passwd.pw_name) };
+    Some(username.to_str().unwrap().to_string())
 }
