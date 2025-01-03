@@ -92,6 +92,26 @@ where
         });
     }
 
+    pub fn invert(Self { entries, _p }: Self) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(
+                    |IdMapEntry {
+                         internal,
+                         external,
+                         len,
+                     }| IdMapEntry {
+                        external: internal,
+                        internal: external,
+                        len,
+                    },
+                )
+                .collect(),
+            _p,
+        }
+    }
+
     fn is_valid(&self) -> bool {
         let Ok(file) = std::fs::File::open(T::subid_file()) else {
             return false;

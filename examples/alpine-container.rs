@@ -8,7 +8,7 @@ use tin_can::container::{
         switch_user::SwitchUser,
         user_namespace::UserNamespaceRoot,
     },
-    ContainerBuilder,
+    ContainerBuilder, IdMap, User,
 };
 
 fn main() {
@@ -26,6 +26,7 @@ fn main() {
     let test_dir = std::path::PathBuf::from("test-data");
 
     let mut command = Command::new("/bin/ash");
+
     command
         .env("PATH", format!("/bin:/sbin/:/usr/bin:/usr/sbin/"))
         .stdout(Stdio::inherit())
@@ -33,7 +34,13 @@ fn main() {
         .stdin(Stdio::inherit());
     let container = ContainerBuilder::new(UserNamespaceRoot::new_with_current_user_as_root(
         MountNamespace::new(
-            RunCommand::new(command),
+            UserNamespaceRoot::new(
+                IdMap::invert(IdMap::new_with_current_user_as_root()),
+                IdMap::invert(IdMap::new_with_current_user_as_root()),
+                Some((uid, gid)),
+                RunCommand::new(command),
+            )
+            .unwrap(),
             MountOperation::switch_root_with_overlay(
                 &test_dir.join("alpine"),
                 &test_dir.join("alpine-upper"),

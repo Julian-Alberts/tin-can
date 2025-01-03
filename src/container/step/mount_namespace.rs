@@ -56,27 +56,27 @@ where
 
 pub enum MountOperation<'a> {
     OverlayMount {
-        lower: &'a Path,
-        upper: &'a Path,
-        work: &'a Path,
-        merged: &'a Path,
+        lower: PathBuf,
+        upper: PathBuf,
+        work: PathBuf,
+        merged: PathBuf,
     },
     PivotRoot {
-        new_root: &'a Path,
-        put_old: &'a Path,
+        new_root: PathBuf,
+        put_old: PathBuf,
         auto_unmount: bool,
     },
     BindMount {
-        src: &'a Path,
-        target: &'a Path,
+        src: PathBuf,
+        target: PathBuf,
     },
     Unmount {
-        mount: &'a Path,
+        mount: PathBuf,
         lazy: bool,
     },
     Mount {
-        source: &'a Path,
-        target: &'a Path,
+        source: PathBuf,
+        target: PathBuf,
         fs_type: Option<&'a std::ffi::CStr>,
         flags: u64,
         data: Option<&'a std::ffi::CStr>,
@@ -84,41 +84,61 @@ pub enum MountOperation<'a> {
 }
 
 impl<'a> MountOperation<'a> {
-    pub fn switch_root(new_root: &'a Path, put_old: &'a Path) -> Vec<Self> {
+    pub fn switch_root(
+        new_root: impl Into<PathBuf> + Clone,
+        put_old: impl Into<PathBuf> + Clone,
+    ) -> Vec<Self> {
         vec![
             Self::BindMount {
-                src: new_root,
-                target: new_root,
+                src: new_root.clone().into(),
+                target: new_root.clone().into(),
             },
             Self::PivotRoot {
-                new_root: new_root,
-                put_old: put_old,
+                new_root: new_root.into(),
+                put_old: put_old.into(),
                 auto_unmount: true,
             },
         ]
     }
 
     pub fn switch_root_with_overlay(
-        lower_ro: &'a Path,
-        upper_rw: &'a Path,
-        work_sys: &'a Path,
-        new_root: &'a Path,
-        put_old: &'a Path,
+        lower_ro: impl Into<PathBuf> + Clone,
+        upper_rw: impl Into<PathBuf> + Clone,
+        work_sys: impl Into<PathBuf> + Clone,
+        new_root: impl Into<PathBuf> + Clone,
+        put_old: impl Into<PathBuf> + Clone,
+        //mount_sys_dirs: bool,
     ) -> Vec<Self> {
+        let new_root: PathBuf = new_root.into();
+        let upper_rw: PathBuf = upper_rw.into();
         vec![
+            Self::Mount {
+                source: "devpts".into(),
+                target: upper_rw.clone().join("dev/pts"),
+                fs_type: Some(c"devpts"),
+                flags: 0,
+                data: None,
+            },
+            Self::Mount {
+                source: "proc".into(),
+                target: upper_rw.clone().join("proc"),
+                fs_type: Some(c"proc"),
+                flags: 0,
+                data: None,
+            },
             Self::OverlayMount {
-                lower: lower_ro,
-                upper: upper_rw,
-                work: work_sys,
-                merged: new_root,
+                lower: lower_ro.into(),
+                upper: upper_rw.into(),
+                work: work_sys.into(),
+                merged: new_root.clone(),
             },
             Self::BindMount {
-                src: new_root,
-                target: new_root,
+                src: new_root.clone().into(),
+                target: new_root.clone().into(),
             },
             Self::PivotRoot {
-                new_root: new_root,
-                put_old: put_old,
+                new_root: new_root.into(),
+                put_old: put_old.into(),
                 auto_unmount: true,
             },
         ]
@@ -147,7 +167,7 @@ impl<'a> MountOperation<'a> {
                     new_root,
                     put_old
                 );
-                let abs_put_old = new_root.join(put_old);
+                let abs_put_old = new_root.join(&put_old);
                 linux::pivot_root(&new_root, &abs_put_old).map_err(|error| MountingError {
                     mount_type: "pivot_root",
                     error,
@@ -155,7 +175,7 @@ impl<'a> MountOperation<'a> {
                 if auto_unmount {
                     let put_old = PathBuf::from("/").join(put_old);
                     MountOperation::Unmount {
-                        mount: &put_old,
+                        mount: put_old.clone(),
                         lazy: true,
                     }
                     .run()?;
@@ -164,14 +184,14 @@ impl<'a> MountOperation<'a> {
             }
             MountOperation::BindMount { src, target } => {
                 log::debug!("Bind {:?} to {:?}", src, target);
-                linux::bind_mount(src, target).map_err(|error| MountingError {
+                linux::bind_mount(&src, &target).map_err(|error| MountingError {
                     mount_type: "bind",
                     error,
                 })
             }
             MountOperation::Unmount { mount, lazy } => {
                 log::debug!("Unmount {} lazy: {lazy}", mount.to_string_lossy());
-                linux::unmount(mount, lazy).map_err(|error| MountingError {
+                linux::unmount(&mount, lazy).map_err(|error| MountingError {
                     mount_type: "unmount",
                     error,
                 })
@@ -183,9 +203,12 @@ impl<'a> MountOperation<'a> {
                 flags,
                 data,
             } => {
-                linux::mount(source, target, fs_type, flags, data).map_err(|error| MountingError {
-                    mount_type: "mount",
-                    error,
+                log::debug!("mounting {source:?} as {fs_type:?} to {target:?} with flags: {flags} and options {data:?}");
+                linux::mount(&source, &target, fs_type, flags, data).map_err(|error| {
+                    MountingError {
+                        mount_type: "mount",
+                        error,
+                    }
                 })
             }
         }

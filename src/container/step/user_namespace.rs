@@ -8,6 +8,7 @@ pub struct UserNamespaceRoot<S> {
     next_step: S,
     uid_map: IdMap<User>,
     gid_map: IdMap<Group>,
+    switch_to: Option<(u32, u32)>,
 }
 
 impl<S> UserNamespaceRoot<S> {
@@ -16,6 +17,7 @@ impl<S> UserNamespaceRoot<S> {
             next_step,
             uid_map: IdMap::new_with_current_user_as_root(),
             gid_map: IdMap::new_with_current_user_as_root(),
+            switch_to: Some((0, 0)),
         }
     }
 }
@@ -33,6 +35,7 @@ impl<S> UserNamespaceRoot<S> {
     pub fn new(
         uid_map: IdMap<User>,
         gid_map: IdMap<Group>,
+        user: Option<(u32, u32)>,
         next_step: S,
     ) -> Result<Self, NewUserNamespaceError> {
         if uid_map.entries.len() > 1
@@ -51,6 +54,7 @@ impl<S> UserNamespaceRoot<S> {
             next_step,
             uid_map,
             gid_map,
+            switch_to: user,
         })
     }
 }
@@ -69,6 +73,7 @@ where
             component: Some(self.next_step),
             msg_queue_ctp: msg_queue_ctp.clone(),
             msg_queue_ptc: msg_queue_ptc.clone(),
+            switch_to: self.switch_to,
         };
         let join_handle = linux::clone_vm_with_namespaces(
             libc::CLONE_NEWUSER,
@@ -79,17 +84,36 @@ where
         fn write_id_map<T: MapType>(map: IdMap<T>, pid: libc::pid_t) -> Result<(), IdMapError<T>> {
             log::debug!("Creating {} for process {pid}", T::file());
             use std::io::Write as _;
-            T::prepare_process(pid)?;
+            T::prepare_process(pid).map_err(|error| IdMapError {
+                error,
+                kind: IdMapErrorKind::FailedToPrepareProcess,
+                _p: Default::default(),
+            })?;
             let mut path = std::path::PathBuf::from("/proc/");
             path.push(pid.to_string());
             path.push(T::file());
-            let mut file = std::fs::File::create(path)?;
+            log::debug!("Writing {:?}", path);
+            let mut file = std::fs::File::create(path).map_err(|error| IdMapError {
+                error,
+                kind: IdMapErrorKind::FailedToCreateIdMapFile,
+                _p: std::marker::PhantomData,
+            })?;
             let mut buf = Vec::new();
             for entry in map.entries {
                 log::debug!("{} {} {}", entry.internal, entry.external, entry.len);
-                write!(buf, "{} {} {}\n", entry.internal, entry.external, entry.len)?;
+                write!(buf, "{} {} {}\n", entry.internal, entry.external, entry.len).map_err(
+                    |error| IdMapError {
+                        error,
+                        kind: IdMapErrorKind::FailedToWriteIdMapFile,
+                        _p: std::marker::PhantomData,
+                    },
+                )?;
             }
-            file.write_all(buf.as_slice())?;
+            file.write_all(buf.as_slice()).map_err(|error| IdMapError {
+                error,
+                kind: IdMapErrorKind::FailedToWriteIdMapFile,
+                _p: std::marker::PhantomData,
+            })?;
             Ok(())
         }
         msg_queue_ctp.receive().unwrap();
@@ -108,16 +132,24 @@ where
 #[derive(thiserror::Error)]
 pub struct IdMapError<T: MapType> {
     error: std::io::Error,
+    kind: IdMapErrorKind,
     _p: std::marker::PhantomData<T>,
 }
 
-impl<T> From<std::io::Error> for IdMapError<T>
+pub enum IdMapErrorKind {
+    FailedToPrepareProcess,
+    FailedToCreateIdMapFile,
+    FailedToWriteIdMapFile,
+}
+
+impl<T> IdMapError<T>
 where
     T: MapType,
 {
-    fn from(error: std::io::Error) -> Self {
+    fn new(kind: IdMapErrorKind, error: std::io::Error) -> Self {
         Self {
             error,
+            kind,
             _p: std::marker::PhantomData,
         }
     }
@@ -159,6 +191,7 @@ where
     component: Option<C>,
     msg_queue_ctp: linux::EventFd<usize>,
     msg_queue_ptc: linux::EventFd<usize>,
+    switch_to: Option<(u32, u32)>,
 }
 fn root_namespace_vm<C>(data: &mut SharedData<C>) -> i32
 where
@@ -168,7 +201,9 @@ where
     data.msg_queue_ctp.send(1).unwrap();
     data.msg_queue_ptc.receive().unwrap();
     log::debug!("Namespace resumed");
-    linux::switch_user((0, 0)).unwrap();
+    if let Some(user) = data.switch_to {
+        linux::switch_user(user).unwrap();
+    }
     let res = data
         .component
         .take()

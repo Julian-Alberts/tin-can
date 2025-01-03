@@ -82,9 +82,11 @@ impl<'a> Drop for ProcessHandle<'a> {
     fn drop(&mut self) {
         if self.pid != 0 {
             let mut status = -1;
+            unsafe { libc::kill(self.pid, libc::SIGTERM) };
             unsafe { libc::waitpid(self.pid, &mut status, 0) };
-            unsafe { libc::free(self.stack_ptr) };
+            self.pid = 0;
         }
+        unsafe { libc::free(self.stack_ptr) };
     }
 }
 
