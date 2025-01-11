@@ -5,6 +5,7 @@ use tin_can::container::{
     step::{
         mount_namespace::{MountNamespace, MountOperation},
         run_command::RunCommand,
+        switch_working_directory::SwitchWorkingDirectory,
         user_namespace::UserNamespaceRoot,
     },
     ContainerBuilder, IdMap,
@@ -37,19 +38,22 @@ fn main() {
         .stdin(Stdio::inherit());
     let container = ContainerBuilder::new(UserNamespaceRoot::new_with_current_user_as_root(
         MountNamespace::new(
-            UserNamespaceRoot::new(
-                IdMap::invert(IdMap::new_with_current_user_as_root()),
-                IdMap::invert(IdMap::new_with_current_user_as_root()),
-                Some((uid, gid)),
-                RunCommand::new(command),
-            )
-            .unwrap(),
             MountOperation::switch_root_with_overlay(
                 &test_dir.join("alpine"),
                 &test_dir.join("alpine-upper"),
                 &test_dir.join("work"),
                 &test_dir.join("root"),
                 &std::path::PathBuf::from("put-old"),
+            ),
+            SwitchWorkingDirectory::new(
+                "/".into(),
+                /*UserNamespaceRoot::new(
+                IdMap::invert(IdMap::new_with_current_user_as_root()),
+                IdMap::invert(IdMap::new_with_current_user_as_root()),
+                Some((uid, gid)),*/
+                RunCommand::new(command),
+                /*)
+                .unwrap(),*/
             ),
         ),
     ))

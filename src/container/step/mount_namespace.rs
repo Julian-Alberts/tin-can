@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::{
     container::Step,
@@ -17,7 +17,7 @@ impl<'a, C> MountNamespace<'a, C>
 where
     C: Step,
 {
-    pub fn new(c: C, operations: Vec<MountOperation<'a>>) -> Self {
+    pub fn new(operations: Vec<MountOperation<'a>>, c: C) -> Self {
         Self { c, operations }
     }
 }
