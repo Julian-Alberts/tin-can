@@ -3,7 +3,6 @@ use std::{
     fmt::{Debug, Display},
     os::unix::ffi::OsStrExt,
     path::PathBuf,
-    str::Utf8Error,
 };
 #[cfg(feature = "cap")]
 pub mod libcap;
@@ -51,14 +50,15 @@ pub enum CloneError {
 }
 
 #[derive(Debug)]
-pub struct ProcessHandle<'a> {
+pub struct ProcessHandle<T, R> {
     pub(super) pid: libc::pid_t,
     stack_ptr: *mut libc::c_void,
-    _p: std::marker::PhantomData<&'a ()>,
+    args: *mut CloneArgs<T, R>,
 }
 
-impl<'a> ProcessHandle<'a> {
-    pub fn join(mut self) -> i32 {
+impl<T, R> ProcessHandle<T, R> {
+    /// TODO: Change return to result
+    pub fn join(mut self) -> Option<R> {
         log::info!("Waiting for namespace process {}", self.pid);
         let mut status = -1;
         let res = unsafe { libc::waitpid(self.pid, &mut status, 0) };
@@ -74,11 +74,12 @@ impl<'a> ProcessHandle<'a> {
             }
         }
         self.pid = 0;
-        status
+        let args = unsafe { Box::from_raw(self.args) };
+        args.result
     }
 }
 
-impl<'a> Drop for ProcessHandle<'a> {
+impl<T, R> Drop for ProcessHandle<T, R> {
     fn drop(&mut self) {
         if self.pid != 0 {
             let mut status = -1;
@@ -89,12 +90,13 @@ impl<'a> Drop for ProcessHandle<'a> {
     }
 }
 
-pub fn clone_vm_with_namespaces<'a, T>(
+pub fn clone_vm_with_namespaces<T, R>(
     flags: i32,
     f: fn(&mut T) -> i32,
-    // This lifetime is used to keep the data alive as long as the process runs
-    args: &'a mut T,
-) -> Result<ProcessHandle<'a>, CloneError> {
+    // The arguments will be move onto the heap. They will not be dropped when leaving this
+    // function. Dropping args is up to the process handle.
+    args: T,
+) -> Result<ProcessHandle<T, R>, CloneError> {
     log::trace!("clone new vm namespace");
     const NAMESPACE_FLAGS: i32 = libc::CLONE_NEWNS
         | libc::CLONE_NEWIPC
@@ -104,19 +106,14 @@ pub fn clone_vm_with_namespaces<'a, T>(
         | libc::CLONE_NEWTIME
         | libc::CLONE_NEWUSER
         | libc::CLONE_NEWCGROUP;
-    const VM_FLAGS: i32 = libc::CLONE_FILES | libc::SIGCHLD;
+    const VM_FLAGS: i32 = libc::CLONE_FILES | libc::SIGCHLD | libc::CLONE_VM;
     if flags & !NAMESPACE_FLAGS != 0 {
         return Err(CloneError::InvalidFlags);
     }
     let stack = new_stack();
-    #[derive(Debug)]
-    struct Args<'a, T> {
-        fn_args: &'a mut T,
-        callback: fn(&mut T) -> i32,
-    }
-    extern "C" fn callback<T>(args: *mut libc::c_void) -> i32 {
+    extern "C" fn callback<T, R>(args: *mut libc::c_void) -> i32 {
         log::info!("Successfuly cloned new process");
-        let args = args as *mut Args<T>;
+        let args = args as *mut CloneArgs<T, R>;
         let args = unsafe { args.as_mut() }.unwrap();
         log::info!("Calling callback with args");
         let res = (args.callback)(&mut args.fn_args);
@@ -124,25 +121,27 @@ pub fn clone_vm_with_namespaces<'a, T>(
         res
     }
     log::debug!("Given callback addr {:p}", std::ptr::addr_of!(f),);
-    let res = unsafe {
-        libc::clone(
-            callback::<T>,
-            stack,
-            flags | VM_FLAGS,
-            &mut Args {
-                fn_args: args,
-                callback: f,
-            } as *mut _ as *mut _,
-        )
-    };
+    let args = Box::into_raw(Box::new(CloneArgs {
+        fn_args: args,
+        callback: f,
+        result: None,
+    }));
+    let res = unsafe { libc::clone(callback::<T, R>, stack, flags | VM_FLAGS, args as *mut _) };
     match res {
         -1 => todo!("Handle error {:?}", std::io::Error::last_os_error()),
         pid => Ok(ProcessHandle {
             pid,
             stack_ptr: stack,
-            _p: std::marker::PhantomData,
+            args,
         }),
     }
+}
+
+#[derive(Debug)]
+struct CloneArgs<T, R> {
+    fn_args: T,
+    callback: fn(&mut T) -> i32,
+    result: Option<R>,
 }
 
 fn new_stack() -> *mut libc::c_void {

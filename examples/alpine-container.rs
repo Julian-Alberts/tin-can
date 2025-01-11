@@ -53,5 +53,6 @@ fn main() {
         ),
     ))
     .run()
-    .unwrap();
+    .unwrap()
+    .join();
 }

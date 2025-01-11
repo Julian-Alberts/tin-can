@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use crate::linux::ProcessHandle;
 use crate::{container::MapType, linux};
 
 use crate::container::{Group, IdMap, Step, User};
@@ -63,23 +64,20 @@ where
     C: Step,
 {
     type Error = BuildUserNamespaceRootError<C::Error>;
-    type Ok = ();
+    type Ok = UserNamespaceHandle<C>;
 
     fn run(self) -> Result<Self::Ok, Self::Error> {
         log::trace!("Create user namespace");
         let msg_queue_ctp = linux::EventFd::new().unwrap();
         let msg_queue_ptc = linux::EventFd::new().unwrap();
-        let mut shared_data = SharedData {
+        let shared_data = SharedData {
             component: Some(self.next_step),
             msg_queue_ctp: msg_queue_ctp.clone(),
             msg_queue_ptc: msg_queue_ptc.clone(),
             switch_to: self.switch_to,
         };
-        let join_handle = linux::clone_vm_with_namespaces(
-            libc::CLONE_NEWUSER,
-            root_namespace_vm,
-            &mut shared_data,
-        )?;
+        let join_handle =
+            linux::clone_vm_with_namespaces(libc::CLONE_NEWUSER, root_namespace_vm, shared_data)?;
         log::info!("PID: {}", join_handle.pid);
         fn write_id_map<T: MapType>(map: IdMap<T>, pid: libc::pid_t) -> Result<(), IdMapError<T>> {
             log::debug!("Creating {} for process {pid}", T::file());
@@ -126,12 +124,15 @@ where
         msg_queue_ptc.send(1).unwrap();
         // shared_data.ret can only be assumed to be set after the child has finished
         log::debug!("Wait for namespace");
-        join_handle.join();
-        log::debug!("Joined namespace");
-        //let Some(res) = shared_data.ret else {
-        //    panic!("No return value");
-        //};
-        Ok(())
+        Ok(UserNamespaceHandle(join_handle))
+    }
+}
+
+pub struct UserNamespaceHandle<C: Step>(ProcessHandle<SharedData<C>, i32>);
+
+impl<C: Step> UserNamespaceHandle<C> {
+    pub fn join(self) -> Option<i32> {
+        self.0.join()
     }
 }
 
