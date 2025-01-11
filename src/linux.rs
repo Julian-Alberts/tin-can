@@ -362,7 +362,7 @@ pub fn mount(
     } else {
         std::ptr::null()
     };
-    unsafe {
+    let res = unsafe {
         libc::mount(
             src.as_ptr(),
             target.as_ptr(),
@@ -371,6 +371,10 @@ pub fn mount(
             data,
         )
     };
+
+    if res == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
 
     Ok(())
 }

@@ -112,25 +112,25 @@ impl<'a> MountOperation<'a> {
         let new_root: PathBuf = new_root.into();
         let upper_rw: PathBuf = upper_rw.into();
         vec![
-            Self::Mount {
+            Self::OverlayMount {
+                lower: lower_ro.into(),
+                upper: upper_rw.clone().into(),
+                work: work_sys.into(),
+                merged: new_root.clone(),
+            },
+            /*Self::Mount {
                 source: "devpts".into(),
-                target: upper_rw.clone().join("dev/pts"),
+                target: new_root.join("dev/pts"),
                 fs_type: Some(c"devpts"),
                 flags: 0,
                 data: None,
-            },
+            },*/
             Self::Mount {
-                source: "proc".into(),
-                target: upper_rw.clone().join("proc"),
+                source: "/proc".into(),
+                target: new_root.join("proc"),
                 fs_type: Some(c"proc"),
                 flags: 0,
                 data: None,
-            },
-            Self::OverlayMount {
-                lower: lower_ro.into(),
-                upper: upper_rw.into(),
-                work: work_sys.into(),
-                merged: new_root.clone(),
             },
             Self::BindMount {
                 src: new_root.clone().into(),
@@ -203,7 +203,7 @@ impl<'a> MountOperation<'a> {
                 flags,
                 data,
             } => {
-                log::debug!("mounting {source:?} as {fs_type:?} to {target:?} with flags: {flags} and options {data:?}");
+                log::debug!("mounting {source:?} of type {fs_type:?} to {target:?} with flags: {flags} and options {data:?}");
                 linux::mount(&source, &target, fs_type, flags, data).map_err(|error| {
                     MountingError {
                         mount_type: "mount",
