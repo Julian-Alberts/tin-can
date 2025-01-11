@@ -74,6 +74,7 @@ impl<T, R> ProcessHandle<T, R> {
             }
         }
         self.pid = 0;
+        log::debug!("Trying to restore arguments from pointer");
         let args = unsafe { Box::from_raw(self.args) };
         args.result
     }
@@ -92,7 +93,7 @@ impl<T, R> Drop for ProcessHandle<T, R> {
 
 pub fn clone_vm_with_namespaces<T, R>(
     flags: i32,
-    f: fn(&mut T) -> i32,
+    f: fn(&mut T) -> (i32, R),
     // The arguments will be move onto the heap. They will not be dropped when leaving this
     // function. Dropping args is up to the process handle.
     args: T,
@@ -118,7 +119,8 @@ pub fn clone_vm_with_namespaces<T, R>(
         log::info!("Calling callback with args");
         let res = (args.callback)(&mut args.fn_args);
         log::info!("Finished callback");
-        res
+        args.result = Some(res.1);
+        res.0
     }
     log::debug!("Given callback addr {:p}", std::ptr::addr_of!(f),);
     let args = Box::into_raw(Box::new(CloneArgs {
@@ -140,7 +142,7 @@ pub fn clone_vm_with_namespaces<T, R>(
 #[derive(Debug)]
 struct CloneArgs<T, R> {
     fn_args: T,
-    callback: fn(&mut T) -> i32,
+    callback: fn(&mut T) -> (i32, R),
     result: Option<R>,
 }
 

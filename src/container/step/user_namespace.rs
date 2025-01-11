@@ -64,7 +64,7 @@ where
     C: Step,
 {
     type Error = BuildUserNamespaceRootError<C::Error>;
-    type Ok = UserNamespaceHandle<C>;
+    type Ok = UserNamespaceHandle<C, C::Ok, BuildUserNamespaceRootError<C::Error>>;
 
     fn run(self) -> Result<Self::Ok, Self::Error> {
         log::trace!("Create user namespace");
@@ -128,10 +128,10 @@ where
     }
 }
 
-pub struct UserNamespaceHandle<C: Step>(ProcessHandle<SharedData<C>, i32>);
+pub struct UserNamespaceHandle<C: Step, O, R>(ProcessHandle<SharedData<C>, Result<O, R>>);
 
-impl<C: Step> UserNamespaceHandle<C> {
-    pub fn join(self) -> Option<i32> {
+impl<C: Step, O, R> UserNamespaceHandle<C, O, R> {
+    pub fn join(self) -> Option<Result<O, R>> {
         self.0.join()
     }
 }
@@ -199,22 +199,25 @@ where
     msg_queue_ptc: linux::EventFd<usize>,
     switch_to: Option<(u32, u32)>,
 }
-fn root_namespace_vm<C>(data: &mut SharedData<C>) -> i32
+fn root_namespace_vm<C>(
+    data: &mut SharedData<C>,
+) -> (i32, Result<C::Ok, BuildUserNamespaceRootError<C::Error>>)
 where
     C: Step,
 {
     log::debug!("root namespace main");
     if let Err(e) = data.msg_queue_ctp.send(1) {
         log::error!("Failed to send signal to parent: {e}");
-        return 1;
+        return (1, Err(BuildUserNamespaceRootError::MsgQueue));
     };
     if let Err(e) = data.msg_queue_ptc.receive() {
         log::error!("Failed to receive signal from parent: {e}");
-        return 1;
+        return (1, Err(BuildUserNamespaceRootError::MsgQueue));
     };
     log::debug!("Namespace resumed");
     if let Some(user) = data.switch_to {
         linux::switch_user(user).unwrap();
+        log::debug!("Switched to user uid: {} gid: {}", user.0, user.1)
     }
     let res = data
         .component
@@ -223,8 +226,7 @@ where
         .run()
         .map_err(BuildUserNamespaceRootError::ChildError)
         .inspect_err(|e| log::error!("{e}"));
-    res.as_ref().unwrap();
-    0
+    (0, res)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -237,4 +239,6 @@ pub enum BuildUserNamespaceRootError<C: std::error::Error> {
     UserIdMapError(#[from] IdMapError<User>),
     #[error("Failed to create namespace: {0}")]
     GroupIdMapError(#[from] IdMapError<Group>),
+    #[error("Error while using the message queue")]
+    MsgQueue,
 }
