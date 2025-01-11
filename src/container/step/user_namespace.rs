@@ -66,10 +66,10 @@ where
     type Ok = ();
 
     fn run(self) -> Result<Self::Ok, Self::Error> {
+        log::trace!("Create user namespace");
         let msg_queue_ctp = linux::EventFd::new().unwrap();
         let msg_queue_ptc = linux::EventFd::new().unwrap();
         let mut shared_data = SharedData {
-            ret: None,
             component: Some(self.next_step),
             msg_queue_ctp: msg_queue_ctp.clone(),
             msg_queue_ptc: msg_queue_ptc.clone(),
@@ -116,12 +116,18 @@ where
             })?;
             Ok(())
         }
+
+        log::debug!("Wait for Signal");
         msg_queue_ctp.receive().unwrap();
+        log::debug!("Got Signal");
         write_id_map(self.uid_map, join_handle.pid)?;
         write_id_map(self.gid_map, join_handle.pid)?;
+        log::debug!("Send Signal");
         msg_queue_ptc.send(1).unwrap();
         // shared_data.ret can only be assumed to be set after the child has finished
+        log::debug!("Wait for namespace");
         join_handle.join();
+        log::debug!("Joined namespace");
         //let Some(res) = shared_data.ret else {
         //    panic!("No return value");
         //};
@@ -187,7 +193,6 @@ struct SharedData<C>
 where
     C: Step,
 {
-    ret: Option<Result<C::Ok, BuildUserNamespaceRootError<C::Error>>>,
     component: Option<C>,
     msg_queue_ctp: linux::EventFd<usize>,
     msg_queue_ptc: linux::EventFd<usize>,
@@ -198,8 +203,14 @@ where
     C: Step,
 {
     log::debug!("root namespace main");
-    data.msg_queue_ctp.send(1).unwrap();
-    data.msg_queue_ptc.receive().unwrap();
+    if let Err(e) = data.msg_queue_ctp.send(1) {
+        log::error!("Failed to send signal to parent: {e}");
+        return 1;
+    };
+    if let Err(e) = data.msg_queue_ptc.receive() {
+        log::error!("Failed to receive signal from parent: {e}");
+        return 1;
+    };
     log::debug!("Namespace resumed");
     if let Some(user) = data.switch_to {
         linux::switch_user(user).unwrap();
@@ -212,7 +223,6 @@ where
         .map_err(BuildUserNamespaceRootError::ChildError)
         .inspect_err(|e| log::error!("{e}"));
     res.as_ref().unwrap();
-    data.ret = Some(res);
     0
 }
 

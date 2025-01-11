@@ -13,7 +13,7 @@ use tin_can::container::{
 
 fn main() {
     CombinedLogger::init(vec![TermLogger::new(
-        LevelFilter::Debug,
+        LevelFilter::Trace,
         Config::default(),
         TerminalMode::Stderr,
         ColorChoice::Auto,
@@ -41,13 +41,15 @@ fn main() {
                 RunCommand::new(command),
             )
             .unwrap(),
-            MountOperation::switch_root_with_overlay(
-                &test_dir.join("alpine"),
-                &test_dir.join("alpine-upper"),
-                &test_dir.join("work"),
-                &test_dir.join("root"),
-                &std::path::PathBuf::from("put-old"),
-            ),
+            vec![], /*
+                                MountOperation::switch_root_with_overlay(
+                                    &test_dir.join("alpine"),
+                                    &test_dir.join("alpine-upper"),
+                                    &test_dir.join("work"),
+                                    &test_dir.join("root"),
+                                    &std::path::PathBuf::from("put-old"),
+                                ),
+                    */
         ),
     ))
     .run()

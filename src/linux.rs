@@ -86,15 +86,16 @@ impl<'a> Drop for ProcessHandle<'a> {
             unsafe { libc::waitpid(self.pid, &mut status, 0) };
             self.pid = 0;
         }
-        unsafe { libc::free(self.stack_ptr) };
     }
 }
 
 pub fn clone_vm_with_namespaces<'a, T>(
     flags: i32,
     f: fn(&mut T) -> i32,
+    // This lifetime is used to keep the data alive as long as the process runs
     args: &'a mut T,
 ) -> Result<ProcessHandle<'a>, CloneError> {
+    log::trace!("clone new vm namespace");
     const NAMESPACE_FLAGS: i32 = libc::CLONE_NEWNS
         | libc::CLONE_NEWIPC
         | libc::CLONE_NEWNET
@@ -122,6 +123,7 @@ pub fn clone_vm_with_namespaces<'a, T>(
         log::info!("Finished callback");
         res
     }
+    log::debug!("Given callback addr {:p}", std::ptr::addr_of!(f),);
     let res = unsafe {
         libc::clone(
             callback::<T>,
@@ -130,7 +132,7 @@ pub fn clone_vm_with_namespaces<'a, T>(
             &mut Args {
                 fn_args: args,
                 callback: f,
-            } as *mut Args<T> as *mut libc::c_void,
+            } as *mut _ as *mut _,
         )
     };
     match res {
@@ -144,7 +146,7 @@ pub fn clone_vm_with_namespaces<'a, T>(
 }
 
 fn new_stack() -> *mut libc::c_void {
-    const STACK_SIZE: libc::size_t = 1024 * 1024 * 10;
+    const STACK_SIZE: libc::size_t = 1024 * 1024;
     let ptr = unsafe {
         libc::mmap(
             std::ptr::null_mut(),
@@ -256,6 +258,7 @@ impl<T> EventFd<T> {
         };
 
         if res == -1 {
+            log::error!("Failed to send data to fd: {}", self.event_fd);
             return Err(std::io::Error::last_os_error());
         }
 
@@ -291,6 +294,7 @@ impl<T> Clone for EventFd<T> {
 
 impl<T> Drop for EventFd<T> {
     fn drop(&mut self) {
+        log::debug!("Close event fd: {}", self.event_fd);
         unsafe { libc::close(self.event_fd) };
     }
 }
