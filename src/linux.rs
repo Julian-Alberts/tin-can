@@ -4,6 +4,8 @@ use std::{
     os::unix::ffi::OsStrExt,
     path::PathBuf,
 };
+
+use nix::errno::Errno;
 #[cfg(feature = "cap")]
 pub mod libcap;
 
@@ -303,19 +305,67 @@ impl<T> Drop for EventFd<T> {
 pub(crate) fn pivot_root(
     new_root: &std::path::Path,
     put_old: &std::path::Path,
-) -> Result<(), std::io::Error> {
-    let new_root = new_root.as_os_str().as_bytes();
-    let new_root = std::ffi::CString::new(new_root).unwrap();
-    let put_old = put_old.as_os_str().as_bytes();
-    let put_old = std::ffi::CString::new(put_old).unwrap();
-
-    let new_root: *const libc::c_char = new_root.as_ptr();
-    let put_old: *const libc::c_char = put_old.as_ptr();
-    let res = unsafe { libc::syscall(libc::SYS_pivot_root, new_root, put_old) };
-    if res == -1 {
-        return Err(std::io::Error::last_os_error());
+) -> Result<(), PivotRootError> {
+    match nix::unistd::pivot_root(new_root, put_old) {
+        Ok(_) => Ok(()),
+        Err(Errno::EBUSY) => Err(PivotRootError::NewRootIsOldRoot),
+        Err(Errno::EINVAL) if !is_mount_point(new_root) => {
+            Err(PivotRootError::NewRootIsNotMountPoint)
+        }
+        Err(Errno::EINVAL) if !is_mount_point(std::path::PathBuf::from("/").as_path()) => {
+            Err(PivotRootError::CurrentRootIsNotMountPoint)
+        }
+        Err(Errno::ENOTDIR) if !new_root.is_dir() => Err(PivotRootError::NewRootIsNotDir),
+        Err(Errno::ENOTDIR) if !put_old.is_dir() => Err(PivotRootError::PutOldIsNotDir),
+        Err(Errno::EPERM) => Err(PivotRootError::MissingPermissions),
+        Err(e) => panic!("Unexpected error {e}"),
     }
-    Ok(())
+}
+
+fn is_mount_point(path: &std::path::Path) -> bool {
+    let mtab_fs = unsafe { libc::setmntent(c"/etc/mtab".as_ptr(), c"r".as_ptr()) };
+    if mtab_fs.is_null() {
+        log::error!("Unable to open /etc/mtab.");
+        return false;
+    };
+
+    let mut mounted = false;
+    let mut mount_point = unsafe { libc::getmntent(mtab_fs) };
+
+    while !mount_point.is_null() {
+        let mnt = unsafe { mount_point.as_ref().unwrap() };
+        if !mnt.mnt_fsname.is_null() {
+            unsafe { std::hint::assert_unchecked(mnt.mnt_fsname.as_ref().is_some()) };
+            let fsname = unsafe { mnt.mnt_fsname.as_ref().unwrap() };
+            let fsname = unsafe { std::ffi::CStr::from_ptr(fsname) };
+            let path = std::ffi::CStr::from_bytes_with_nul(path.as_os_str().as_bytes()).unwrap();
+
+            if fsname == path {
+                mounted = true;
+                break;
+            }
+        }
+        mount_point = unsafe { libc::getmntent(mtab_fs) }
+    }
+
+    unsafe { libc::endmntent(mtab_fs) };
+    mounted
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PivotRootError {
+    #[error("new_root is the same as the old root")]
+    NewRootIsOldRoot,
+    #[error("new_root is not a directory")]
+    NewRootIsNotDir,
+    #[error("put_old is not a directory")]
+    PutOldIsNotDir,
+    #[error("Missing permissions to run pivot_root")]
+    MissingPermissions,
+    #[error("new_root is not a mount point")]
+    NewRootIsNotMountPoint,
+    #[error("Current root (/) is not a mount point")]
+    CurrentRootIsNotMountPoint,
 }
 
 pub(crate) fn mount_overlay(
@@ -377,23 +427,6 @@ pub fn mount(
     }
 
     Ok(())
-}
-
-pub(crate) fn unmount(mount: &std::path::Path, lazy: bool) -> Result<(), std::io::Error> {
-    let flags = if lazy { libc::MNT_DETACH } else { 0 };
-    let target = std::ffi::CString::new(mount.as_os_str().as_bytes()).unwrap();
-    let res = unsafe { libc::umount2(target.as_ptr(), flags) };
-    if res == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-pub(crate) fn bind_mount(
-    src: &std::path::Path,
-    target: &std::path::Path,
-) -> Result<(), std::io::Error> {
-    mount(src, target, None, libc::MS_BIND, None)
 }
 
 pub(crate) fn get_user_name(uid: u32) -> Option<String> {
