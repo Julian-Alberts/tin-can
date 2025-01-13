@@ -6,7 +6,10 @@ use std::{
 
 use nix::mount::{MntFlags, MsFlags};
 
-use crate::{container::Step, linux};
+use crate::{
+    container::{Step, StepHandle},
+    linux,
+};
 
 pub struct MountNamespace<'a, C>
 where
@@ -31,9 +34,9 @@ where
 {
     type Error = MountNamespaceError<C::Error>;
 
-    type Ok = C::Ok;
+    type Handle = MountNamespaceHandler<C>;
 
-    fn run(self) -> Result<Self::Ok, Self::Error> {
+    fn run(self) -> Result<Self::Handle, Self::Error> {
         log::info!("Unshare mount namespace");
         nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNS)
             .map_err(MountNamespaceError::Unshare)?;
@@ -41,7 +44,24 @@ where
             .into_iter()
             .try_for_each(MountOperation::run)?;
         log::info!("Finished mounting");
-        self.c.run().map_err(MountNamespaceError::ChildError)
+        Ok(MountNamespaceHandler(self.c.run()))
+    }
+}
+
+pub struct MountNamespaceHandler<S>(Result<S::Handle, S::Error>)
+where
+    S: Step;
+
+impl<S> StepHandle for MountNamespaceHandler<S>
+where
+    S: Step,
+{
+    type Error = S::Error;
+
+    type Ok = S::Handle;
+
+    fn join(self) -> Result<Self::Ok, Self::Error> {
+        self.0
     }
 }
 

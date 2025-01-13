@@ -1,5 +1,5 @@
 use crate::{
-    container::Step,
+    container::{Step, StepHandle},
     linux::{self, CloneError, ProcessHandle},
 };
 
@@ -22,19 +22,33 @@ where
 {
     type Error = CloneError;
 
-    type Ok = Result<S::Ok, S::Error>;
+    type Handle = PidNamespaceHandle<S>;
 
-    fn run(self) -> Result<Self::Ok, Self::Error> {
-        let res = linux::clone_vm_with_namespaces(libc::CLONE_NEWPID, unshare_pid_ns, Some(self.0));
-        let res = match res {
-            Ok(h) => h.join().unwrap(),
-            Err(_) => todo!(),
-        };
+    fn run(self) -> Result<Self::Handle, Self::Error> {
+        let res =
+            linux::clone_vm_with_namespaces(libc::CLONE_NEWPID, unshare_pid_ns, Some(self.0))?;
         Ok(res)
     }
 }
 
-fn unshare_pid_ns<S>(next: &mut Option<S>) -> (i32, Result<<S as Step>::Ok, <S as Step>::Error>)
+pub struct PidNamespaceHandle<S>(Result<S::Handle, S::Error>)
+where
+    S: Step;
+
+impl<S> StepHandle for PidNamespaceHandle<S>
+where
+    S: Step,
+{
+    type Error = S::Error;
+
+    type Ok = S::Handle;
+
+    fn join(self) -> Result<Self::Ok, Self::Error> {
+        self.0
+    }
+}
+
+fn unshare_pid_ns<S>(next: &mut Option<S>) -> (i32, Result<<S as Step>::Handle, <S as Step>::Error>)
 where
     S: Step,
 {

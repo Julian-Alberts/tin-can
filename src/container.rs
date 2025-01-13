@@ -8,8 +8,14 @@ use crate::linux;
 
 pub trait Step {
     type Error: std::error::Error;
+    type Handle: StepHandle;
+    fn run(self) -> Result<Self::Handle, Self::Error>;
+}
+
+pub trait StepHandle {
+    type Error: std::error::Error;
     type Ok;
-    fn run(self) -> Result<Self::Ok, Self::Error>;
+    fn join(self) -> Result<Self::Ok, Self::Error>;
 }
 
 pub trait MapType {
