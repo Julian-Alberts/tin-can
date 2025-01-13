@@ -150,14 +150,14 @@ impl<'a> MountOperation<'a> {
                 fs_type: Some(c"devpts"),
                 flags: 0,
                 data: None,
-            },*/
+            },
             Self::Mount {
                 source: None,
                 target: new_root.join("proc"),
                 fs_type: Some(c"proc"),
                 flags: MsFlags::empty(),
                 data: None,
-            },
+            },*/
             Self::BindMount {
                 src: new_root.clone().into(),
                 target: new_root.clone().into(),
@@ -165,8 +165,8 @@ impl<'a> MountOperation<'a> {
             Self::PivotRoot {
                 new_root: new_root.into(),
                 put_old: put_old.into(),
-                auto_unmount: true,
-                create_if_does_not_exisit: true,
+                auto_unmount: false,
+                create_if_does_not_exisit: false,
             },
         ]
     }

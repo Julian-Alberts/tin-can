@@ -17,7 +17,7 @@ impl<C> ContainerBuilder<C>
 where
     C: Step,
 {
-    pub fn run(self) -> Result<C::Ok, C::Error> {
+    pub fn run(self) -> Result<C::Handle, C::Error> {
         self.component.run()
     }
 }

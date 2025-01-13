@@ -9,7 +9,7 @@ use tin_can::container::{
         switch_working_directory::SwitchWorkingDirectory,
         user_namespace::UserNamespaceRoot,
     },
-    ContainerBuilder, IdMap,
+    ContainerBuilder, IdMap, StepHandle,
 };
 
 fn main() {
@@ -38,7 +38,8 @@ fn main() {
         .stderr(Stdio::inherit())
         .stdin(Stdio::inherit());
     let container = ContainerBuilder::new(UserNamespaceRoot::new_with_current_user_as_root(
-        PIDNamespace::new(MountNamespace::new(
+        /*PIDNamespace::new(*/
+        MountNamespace::new(
             MountOperation::switch_root_with_overlay(
                 &test_dir.join("alpine"),
                 &test_dir.join("alpine-upper"),
@@ -54,13 +55,19 @@ fn main() {
                 Some((uid, gid)),*/
                 RunCommand::new(command),
                 /*)
-                .unwrap(),*/
+                unwrap(),*/
             ),
-        )),
+        ),
     ))
     .run()
     .unwrap()
     .join()
     .unwrap()
+    .join()
+    .unwrap()
+    .join()
+    .unwrap()
+    .join()
     .unwrap();
+    println!("{container}")
 }

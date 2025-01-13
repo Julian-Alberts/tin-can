@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use crate::linux::ProcessHandle;
 use crate::{container::MapType, linux};
 
-use crate::container::{Group, IdMap, Step, User};
+use crate::container::{Group, IdMap, Step, StepHandle, User};
 
 pub struct UserNamespaceRoot<S> {
     next_step: S,
@@ -59,14 +59,14 @@ impl<S> UserNamespaceRoot<S> {
         })
     }
 }
-impl<C> Step for UserNamespaceRoot<C>
+impl<S> Step for UserNamespaceRoot<S>
 where
-    C: Step,
+    S: Step,
 {
-    type Error = BuildUserNamespaceRootError<C::Error>;
-    type Ok = UserNamespaceHandle<C, C::Ok, BuildUserNamespaceRootError<C::Error>>;
+    type Error = BuildUserNamespaceRootError<S::Error>;
+    type Handle = UserNamespaceHandle<S>;
 
-    fn run(self) -> Result<Self::Ok, Self::Error> {
+    fn run(self) -> Result<Self::Handle, Self::Error> {
         log::trace!("Create user namespace");
         let msg_queue_ctp = linux::EventFd::new().unwrap();
         let msg_queue_ptc = linux::EventFd::new().unwrap();
@@ -128,11 +128,17 @@ where
     }
 }
 
-pub struct UserNamespaceHandle<C: Step, O, R>(ProcessHandle<SharedData<C>, Result<O, R>>);
+pub struct UserNamespaceHandle<S: Step>(
+    ProcessHandle<SharedData<S>, Result<S::Handle, BuildUserNamespaceRootError<S::Error>>>,
+);
 
-impl<C: Step, O, R> UserNamespaceHandle<C, O, R> {
-    pub fn join(self) -> Option<Result<O, R>> {
-        self.0.join()
+impl<S: Step> StepHandle for UserNamespaceHandle<S> {
+    type Error = BuildUserNamespaceRootError<S::Error>;
+
+    type Ok = S::Handle;
+
+    fn join(self) -> Result<Self::Ok, Self::Error> {
+        self.0.join().unwrap()
     }
 }
 
@@ -199,11 +205,14 @@ where
     msg_queue_ptc: linux::EventFd<usize>,
     switch_to: Option<(u32, u32)>,
 }
-fn root_namespace_vm<C>(
-    data: &mut SharedData<C>,
-) -> (i32, Result<C::Ok, BuildUserNamespaceRootError<C::Error>>)
+fn root_namespace_vm<S>(
+    data: &mut SharedData<S>,
+) -> (
+    i32,
+    Result<S::Handle, BuildUserNamespaceRootError<S::Error>>,
+)
 where
-    C: Step,
+    S: Step,
 {
     log::debug!("root namespace main");
     if let Err(e) = data.msg_queue_ctp.send(1) {
@@ -230,11 +239,11 @@ where
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum BuildUserNamespaceRootError<C: std::error::Error> {
+pub enum BuildUserNamespaceRootError<E: std::error::Error> {
     #[error(transparent)]
     CloneError(#[from] linux::CloneError),
     #[error(transparent)]
-    ChildError(C),
+    ChildError(E),
     #[error("Failed to create namespace: {0}")]
     UserIdMapError(#[from] IdMapError<User>),
     #[error("Failed to create namespace: {0}")]

@@ -27,11 +27,11 @@ where
     fn run(self) -> Result<Self::Handle, Self::Error> {
         let res =
             linux::clone_vm_with_namespaces(libc::CLONE_NEWPID, unshare_pid_ns, Some(self.0))?;
-        Ok(res)
+        Ok(PidNamespaceHandle(res))
     }
 }
 
-pub struct PidNamespaceHandle<S>(Result<S::Handle, S::Error>)
+pub struct PidNamespaceHandle<S>(ProcessHandle<Option<S>, Result<S::Handle, S::Error>>)
 where
     S: Step;
 
@@ -43,8 +43,8 @@ where
 
     type Ok = S::Handle;
 
-    fn join(self) -> Result<Self::Ok, Self::Error> {
-        self.0
+    fn join(self) -> Result<S::Handle, S::Error> {
+        self.0.join().unwrap() // TODO: remove unwrap
     }
 }
 
