@@ -1,4 +1,4 @@
-use crate::container::{Step, StepHandle};
+use crate::container::step::{Step, StepHandle};
 
 pub struct RunCommand {
     command: std::process::Command,

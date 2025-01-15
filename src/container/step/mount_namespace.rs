@@ -7,7 +7,7 @@ use std::{
 use nix::mount::{MntFlags, MsFlags};
 
 use crate::{
-    container::{Step, StepHandle},
+    container::step::{Step, StepHandle},
     linux,
 };
 

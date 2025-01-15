@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::container::{Step, StepHandle};
+use crate::container::step::{Step, StepHandle};
 
 pub struct SwitchWorkingDirectory<S>
 where

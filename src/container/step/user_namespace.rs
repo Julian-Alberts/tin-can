@@ -3,7 +3,10 @@ use std::fmt::Debug;
 use crate::linux::ProcessHandle;
 use crate::{container::MapType, linux};
 
-use crate::container::{Group, IdMap, Step, StepHandle, User};
+use crate::container::{
+    step::{Step, StepHandle},
+    Group, IdMap, User,
+};
 
 pub struct UserNamespaceRoot<S> {
     next_step: S,

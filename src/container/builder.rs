@@ -1,4 +1,4 @@
-use super::Step;
+use crate::container::step::Step;
 
 pub struct ContainerBuilder<C> {
     component: C,

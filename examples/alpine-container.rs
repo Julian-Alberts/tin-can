@@ -2,6 +2,7 @@ use std::process::{Command, Stdio};
 
 use simplelog::*;
 use tin_can::container::{
+    step::StepHandle,
     step::{
         mount_namespace::{MountNamespace, MountOperation},
         pid_namespace::PIDNamespace,
@@ -9,7 +10,7 @@ use tin_can::container::{
         switch_working_directory::SwitchWorkingDirectory,
         user_namespace::UserNamespaceRoot,
     },
-    ContainerBuilder, IdMap, StepHandle,
+    ContainerBuilder, IdMap,
 };
 
 fn main() {
