@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::container::step::{Step, StepHandle};
+use crate::container::{step::Step, Context};
 
 pub struct SwitchWorkingDirectory<S>
 where
@@ -25,28 +25,12 @@ where
 {
     type Error = SwitchWorkingDirectoryError<S::Error>;
 
-    type Handle = SwitchWorkingDirectoryHandle<S>;
-
-    fn run(self) -> Result<Self::Handle, Self::Error> {
+    fn run(self, ctx: &mut Context) -> Result<(), Self::Error> {
         std::env::set_current_dir(self.new_wd)?;
-        Ok(SwitchWorkingDirectoryHandle(self.next.run()))
-    }
-}
-
-pub struct SwitchWorkingDirectoryHandle<S>(Result<S::Handle, S::Error>)
-where
-    S: Step;
-
-impl<S> StepHandle for SwitchWorkingDirectoryHandle<S>
-where
-    S: Step,
-{
-    type Error = S::Error;
-
-    type Ok = S::Handle;
-
-    fn join(self) -> Result<Self::Ok, Self::Error> {
-        self.0
+        Ok(self
+            .next
+            .run(ctx)
+            .map_err(SwitchWorkingDirectoryError::ChildError)?)
     }
 }
 

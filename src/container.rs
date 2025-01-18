@@ -1,10 +1,16 @@
 mod builder;
+mod context;
 pub mod step;
-use std::{io::BufRead, ops::RangeBounds};
+use std::io::BufRead;
 
 pub use builder::*;
+pub use context::*;
 
 use crate::linux;
+
+pub struct Container {
+    ctx: Context,
+}
 
 pub trait MapType {
     fn get_current() -> u32;

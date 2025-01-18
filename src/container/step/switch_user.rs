@@ -1,5 +1,5 @@
 use crate::{
-    container::step::{Step, StepHandle},
+    container::{step::Step, Context},
     linux,
 };
 
@@ -29,39 +29,24 @@ impl<S> Step for SwitchUser<S>
 where
     S: Step,
 {
-    type Error = SwitchUserError;
+    type Error = SwitchUserError<S::Error>;
 
-    type Handle = SwitchUserHandle<S::Handle, S::Error>;
-
-    fn run(self) -> Result<Self::Handle, Self::Error> {
+    fn run(self, ctx: &mut Context) -> Result<(), Self::Error> {
         linux::switch_user((self.uid, self.gid))?;
-        Ok(SwitchUserHandle {
-            res: self.next_step.run(),
-            _p: std::marker::PhantomData,
-        })
-    }
-}
-
-pub struct SwitchUserHandle<O, E> {
-    res: Result<O, E>,
-    _p: std::marker::PhantomData<(O, E)>,
-}
-
-impl<O, E> StepHandle for SwitchUserHandle<O, E>
-where
-    E: std::error::Error,
-{
-    type Error = E;
-
-    type Ok = O;
-
-    fn join(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Ok(self
+            .next_step
+            .run(ctx)
+            .map_err(SwitchUserError::ChildError)?)
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum SwitchUserError {
+pub enum SwitchUserError<S>
+where
+    S: std::error::Error,
+{
     #[error(transparent)]
     SwitchUser(#[from] linux::SwitchUserError),
+    #[error("Error switching user: {0}")]
+    ChildError(S),
 }

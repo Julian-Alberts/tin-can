@@ -6,6 +6,7 @@ use std::{
 };
 
 use nix::errno::Errno;
+
 #[cfg(feature = "cap")]
 pub mod libcap;
 

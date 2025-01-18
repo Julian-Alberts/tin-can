@@ -1,6 +1,6 @@
 use crate::{
-    container::step::{Step, StepHandle},
-    linux::{self, CloneError, ProcessHandle},
+    container::{step::Step, Context},
+    linux,
 };
 
 pub struct PIDNamespace<S>(S)
@@ -20,39 +20,48 @@ impl<S> Step for PIDNamespace<S>
 where
     S: Step,
 {
-    type Error = CloneError;
+    type Error = PidNamespaceError<S::Error>;
 
-    type Handle = PidNamespaceHandle<S>;
-
-    fn run(self) -> Result<Self::Handle, Self::Error> {
-        let res =
-            linux::clone_vm_with_namespaces(libc::CLONE_NEWPID, unshare_pid_ns, Some(self.0))?;
-        Ok(PidNamespaceHandle(res))
+    fn run(self, ctx: &mut Context) -> Result<(), Self::Error> {
+        let res = linux::clone_vm_with_namespaces(
+            libc::CLONE_NEWPID,
+            unshare_pid_ns,
+            SharedData {
+                next: Some(self.0),
+                ctx,
+            },
+        )
+        .map_err(PidNamespaceError::ChildError)
+        .unwrap();
+        res.join().unwrap().map_err(PidNamespaceError::ChildError)?;
+        Ok(())
     }
 }
 
-pub struct PidNamespaceHandle<S>(ProcessHandle<Option<S>, Result<S::Handle, S::Error>>)
-where
-    S: Step;
-
-impl<S> StepHandle for PidNamespaceHandle<S>
+struct SharedData<'a, S>
 where
     S: Step,
 {
-    type Error = S::Error;
-
-    type Ok = S::Handle;
-
-    fn join(self) -> Result<S::Handle, S::Error> {
-        self.0.join().unwrap() // TODO: remove unwrap
-    }
+    next: Option<S>,
+    ctx: &'a mut Context,
 }
 
-fn unshare_pid_ns<S>(next: &mut Option<S>) -> (i32, Result<<S as Step>::Handle, <S as Step>::Error>)
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum PidNamespaceError<S>
+where
+    S: std::error::Error,
+{
+    #[error("Error creating pid namespace {0}")]
+    ChildError(S),
+}
+
+fn unshare_pid_ns<S>(data: &mut SharedData<S>) -> (i32, Result<(), <S as Step>::Error>)
 where
     S: Step,
 {
+    data.ctx.entered_pid_ns();
     linux::unshare(libc::CLONE_NEWPID).unwrap();
     log::trace!("New PID namespace {}", std::process::id());
-    (0, next.take().unwrap().run())
+    let r = data.next.take().unwrap().run(data.ctx);
+    (0, r)
 }

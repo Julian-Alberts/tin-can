@@ -1,3 +1,5 @@
+use super::Context;
+
 pub mod mount_namespace;
 pub mod pid_namespace;
 pub mod run_command;
@@ -7,12 +9,5 @@ pub mod user_namespace;
 
 pub trait Step {
     type Error: std::error::Error;
-    type Handle: StepHandle;
-    fn run(self) -> Result<Self::Handle, Self::Error>;
-}
-
-pub trait StepHandle {
-    type Error: std::error::Error;
-    type Ok;
-    fn join(self) -> Result<Self::Ok, Self::Error>;
+    fn run(self, ctx: &mut Context) -> Result<(), Self::Error>;
 }

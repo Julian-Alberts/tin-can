@@ -1,12 +1,9 @@
 use std::fmt::Debug;
 
-use crate::linux::ProcessHandle;
+use crate::container::Context;
 use crate::{container::MapType, linux};
 
-use crate::container::{
-    step::{Step, StepHandle},
-    Group, IdMap, User,
-};
+use crate::container::{step::Step, Group, IdMap, User};
 
 pub struct UserNamespaceRoot<S> {
     next_step: S,
@@ -67,9 +64,8 @@ where
     S: Step,
 {
     type Error = BuildUserNamespaceRootError<S::Error>;
-    type Handle = UserNamespaceHandle<S>;
 
-    fn run(self) -> Result<Self::Handle, Self::Error> {
+    fn run(self, ctx: &mut Context) -> Result<(), Self::Error> {
         log::trace!("Create user namespace");
         let msg_queue_ctp = linux::EventFd::new().unwrap();
         let msg_queue_ptc = linux::EventFd::new().unwrap();
@@ -78,6 +74,7 @@ where
             msg_queue_ctp: msg_queue_ctp.clone(),
             msg_queue_ptc: msg_queue_ptc.clone(),
             switch_to: self.switch_to,
+            ctx,
         };
         let join_handle =
             linux::clone_vm_with_namespaces(libc::CLONE_NEWUSER, root_namespace_vm, shared_data)?;
@@ -127,21 +124,8 @@ where
         msg_queue_ptc.send(1).unwrap();
         // shared_data.ret can only be assumed to be set after the child has finished
         log::debug!("Wait for namespace");
-        Ok(UserNamespaceHandle(join_handle))
-    }
-}
-
-pub struct UserNamespaceHandle<S: Step>(
-    ProcessHandle<SharedData<S>, Result<S::Handle, BuildUserNamespaceRootError<S::Error>>>,
-);
-
-impl<S: Step> StepHandle for UserNamespaceHandle<S> {
-    type Error = BuildUserNamespaceRootError<S::Error>;
-
-    type Ok = S::Handle;
-
-    fn join(self) -> Result<Self::Ok, Self::Error> {
-        self.0.join().unwrap()
+        let ctx = join_handle.join().unwrap()?;
+        Ok(ctx)
     }
 }
 
@@ -199,7 +183,7 @@ impl std::fmt::Display for IdMapError<Group> {
     }
 }
 
-struct SharedData<C>
+struct SharedData<'a, C>
 where
     C: Step,
 {
@@ -207,16 +191,15 @@ where
     msg_queue_ctp: linux::EventFd<usize>,
     msg_queue_ptc: linux::EventFd<usize>,
     switch_to: Option<(u32, u32)>,
+    ctx: &'a mut Context,
 }
 fn root_namespace_vm<S>(
     data: &mut SharedData<S>,
-) -> (
-    i32,
-    Result<S::Handle, BuildUserNamespaceRootError<S::Error>>,
-)
+) -> (i32, Result<(), BuildUserNamespaceRootError<S::Error>>)
 where
     S: Step,
 {
+    data.ctx.entered_user_ns();
     log::debug!("root namespace main");
     if let Err(e) = data.msg_queue_ctp.send(1) {
         log::error!("Failed to send signal to parent: {e}");
@@ -235,7 +218,7 @@ where
         .component
         .take()
         .expect("Component called twice")
-        .run()
+        .run(data.ctx)
         .map_err(BuildUserNamespaceRootError::ChildError)
         .inspect_err(|e| log::error!("{e}"));
     (0, res)

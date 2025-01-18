@@ -7,7 +7,7 @@ use std::{
 use nix::mount::{MntFlags, MsFlags};
 
 use crate::{
-    container::step::{Step, StepHandle},
+    container::{step::Step, Context},
     linux,
 };
 
@@ -15,7 +15,7 @@ pub struct MountNamespace<'a, C>
 where
     C: Step,
 {
-    c: C,
+    next: C,
     operations: Vec<MountOperation<'a>>,
 }
 
@@ -24,7 +24,10 @@ where
     C: Step,
 {
     pub fn new(operations: Vec<MountOperation<'a>>, c: C) -> Self {
-        Self { c, operations }
+        Self {
+            next: c,
+            operations,
+        }
     }
 }
 
@@ -34,9 +37,8 @@ where
 {
     type Error = MountNamespaceError<C::Error>;
 
-    type Handle = MountNamespaceHandler<C>;
-
-    fn run(self) -> Result<Self::Handle, Self::Error> {
+    fn run(self, ctx: &mut Context) -> Result<(), Self::Error> {
+        ctx.entered_mnt_ns();
         log::info!("Unshare mount namespace");
         nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNS)
             .map_err(MountNamespaceError::Unshare)?;
@@ -44,24 +46,7 @@ where
             .into_iter()
             .try_for_each(MountOperation::run)?;
         log::info!("Finished mounting");
-        Ok(MountNamespaceHandler(self.c.run()))
-    }
-}
-
-pub struct MountNamespaceHandler<S>(Result<S::Handle, S::Error>)
-where
-    S: Step;
-
-impl<S> StepHandle for MountNamespaceHandler<S>
-where
-    S: Step,
-{
-    type Error = S::Error;
-
-    type Ok = S::Handle;
-
-    fn join(self) -> Result<Self::Ok, Self::Error> {
-        self.0
+        self.next.run(ctx).map_err(MountNamespaceError::ChildError)
     }
 }
 
