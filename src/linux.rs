@@ -1,7 +1,7 @@
 use core::panic;
 use std::{
     fmt::{Debug, Display},
-    os::unix::ffi::OsStrExt,
+    os::{fd::FromRawFd, unix::ffi::OsStrExt},
     path::PathBuf,
 };
 
@@ -439,4 +439,9 @@ pub(crate) fn get_user_name(uid: u32) -> Option<String> {
     let passwd = unsafe { passwd.as_ref().unwrap() };
     let username = unsafe { std::ffi::CStr::from_ptr(passwd.pw_name) };
     Some(username.to_str().unwrap().to_string())
+}
+
+pub(crate) fn pidfd_open(pid: u32) -> std::fs::File {
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    unsafe { std::fs::File::from_raw_fd(fd as i32) }
 }

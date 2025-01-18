@@ -19,7 +19,7 @@ impl<C> ContainerBuilder<C>
 where
     C: Step,
 {
-    pub fn run(self) -> Result<(), C::Error> {
+    pub fn run(self) -> Result<Container, C::Error> {
         let mut ctx = Context::default();
         self.component.run(&mut ctx)?;
         Ok(Container { ctx })
